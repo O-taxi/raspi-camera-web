@@ -209,6 +209,18 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Application runtime data
+/data/photos/
+/data/*.json
+/test*.jpg
+
+# Local configuration and secrets
+.env.*
+!.env.example
+
+# Local service overrides
+*.service.local
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

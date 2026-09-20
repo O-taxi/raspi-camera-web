@@ -1,0 +1,23 @@
+[Unit]
+Description=Raspberry Pi Camera Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<your-user>
+Group=<your-group>
+WorkingDirectory=<project-dir>
+EnvironmentFile=-<env-file>
+Environment=PATH=<uv-bin-dir>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=<photo-dir>
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

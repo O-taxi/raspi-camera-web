@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Raspi Camera</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">PRIVATE CAMERA</p>
+        <h1>Raspi Camera</h1>
+      </header>
+
+      <section class="capture-panel" aria-label="撮影操作">
+        <button id="capture-button" class="capture-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8.5 5.5 10 3.5h4l1.5 2H19a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3h3.5Z"></path>
+            <circle cx="12" cy="13" r="4"></circle>
+          </svg>
+          <span id="capture-label">撮影</span>
+        </button>
+      </section>
+
+      <section id="latest" class="latest" aria-live="polite" hidden>
+        <img id="latest-image" alt="直近に撮影したカメラ画像">
+        <p id="latest-time"></p>
+      </section>
+
+      <section aria-labelledby="gallery-title">
+        <div class="section-heading">
+          <h2 id="gallery-title">撮影履歴</h2>
+        </div>
+        <div id="gallery" class="gallery"></div>
+        <p id="empty-message" class="empty-message">保存された写真はありません。</p>
+        <nav id="pagination" class="pagination" aria-label="撮影履歴のページ" hidden>
+          <button id="previous-page" class="secondary-button" type="button">前へ</button>
+          <span id="page-info" aria-live="polite"></span>
+          <button id="next-page" class="secondary-button" type="button">次へ</button>
+        </nav>
+      </section>
+    </main>
+
+    <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <dialog id="photo-dialog" class="photo-dialog" aria-labelledby="dialog-time">
+      <div class="dialog-toolbar">
+        <p id="dialog-time"></p>
+        <button id="close-dialog" class="secondary-button close-button" type="button" aria-label="閉じる">×</button>
+      </div>
+      <img id="dialog-image" alt="選択したカメラ画像">
+      <div class="dialog-actions">
+        <button id="delete-photo" class="danger-button" type="button">この写真を削除</button>
+      </div>
+    </dialog>
+
+    <script src="{{ url_for('static', path='/js/app.js') }}" defer></script>
+  </body>
+</html>
