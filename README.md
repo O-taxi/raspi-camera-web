@@ -22,36 +22,105 @@ Raspberry Piに接続したカメラを、Tailscale内のブラウザーから�
 - systemd
 - Tailscale Serve
 
-## 開発環境での起動
+## 通信シーケンス
 
-依存関係を同期し、モック撮影モードで起動します。
+```mermaid
+sequenceDiagram
+    actor User as ブラウザー
+    participant Tailscale as Tailscale Serve
+    participant API as FastAPI<br/>127.0.0.1:8000
+    participant Camera as CameraService
+    participant Command as fswebcam
+    participant USB as USBカメラ
+    participant Store as data/photos
 
-```bash
-uv sync
-CAMERA_BACKEND=mock uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+    User->>Tailscale: HTTPS POST /api/capture
+    Tailscale->>API: HTTP POST /api/capture
+    API->>Camera: 撮影要求
+    Camera->>Command: 出力先を指定して実行
+    Command->>USB: フレーム取得
+    USB-->>Command: カメラ画像
+    Command->>Store: JPEGを保存
+    Command-->>Camera: 終了結果
+    Camera->>Store: 出力確認・保存上限の整理
+    Camera-->>API: 写真ID・撮影時刻・URL
+    API-->>Tailscale: JSON
+    Tailscale-->>User: 撮影結果
+
+    User->>Tailscale: HTTPS GET /api/photos
+    Tailscale->>API: HTTP GET /api/photos
+    API->>Store: 写真一覧を取得
+    Store-->>API: 写真メタデータ
+    API-->>Tailscale: JSON
+    Tailscale-->>User: 写真一覧
+
+    User->>Tailscale: HTTPS GET /photos/{photo_id}
+    Tailscale->>API: HTTP GET /photos/{photo_id}
+    API->>Store: IDを検証してJPEGを取得
+    Store-->>API: JPEG
+    API-->>Tailscale: JPEG
+    Tailscale-->>User: 画像
+
+    User->>Tailscale: HTTPS DELETE /api/photos/{photo_id}
+    Tailscale->>API: HTTP DELETE /api/photos/{photo_id}
+    API->>Store: IDを検証して削除
+    API-->>Tailscale: 204 No Content
+    Tailscale-->>User: 削除完了
 ```
 
-ブラウザーで `http://127.0.0.1:8000` を開きます。
+同一端末から`127.0.0.1:8000`へ直接接続する場合は、Tailscale Serveを経由しません。
 
-Raspberry Piへの配置後は、Uvicornをsystemdで常駐させ、Tailscale Serveから `127.0.0.1:8000` へ転送します。Tailscaleの設定は [docs/tailscale-setup.md](docs/tailscale-setup.md) を参照してください。
+## USBカメラで起動
 
-Raspberry Pi OSとUSBカメラを準備する手順は [docs/raspberry-pi-setup.md](docs/raspberry-pi-setup.md) を参照してください。
+先に [Raspberry PiとUSBカメラのセットアップ](docs/raspberry-pi-setup.md) に従って、`uv`、`fswebcam`、`v4l-utils`を準備します。その後、依存関係を同期します。
 
-WSLでのモック撮影を含む開発手順と現在の実装状況は [docs/development.md](docs/development.md) を参照してください。
+```bash
+uv sync --python /usr/bin/python3 --no-python-downloads --no-dev --locked
+```
+
+USBカメラを接続し、撮影可能なV4L2デバイスとして認識されていることを確認します。
+
+```bash
+uv run --no-sync python scripts/check_usb_camera.py --device /dev/video0
+```
+
+`OK: 撮影可能なUSBカメラを1台認識しています。`と表示されたら、アプリと同じ条件でテスト撮影します。
+
+```bash
+fswebcam \
+  --device /dev/video0 \
+  --resolution 1280x720 \
+  --no-banner \
+  /tmp/raspi-camera-test.jpg
+file /tmp/raspi-camera-test.jpg
+```
+
+JPEGとして保存できたら、実カメラバックエンドでアプリを起動します。
+
+```bash
+CAMERA_BACKEND=fswebcam \
+CAMERA_DEVICE=/dev/video0 \
+uv run --no-sync uvicorn app.main:app \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+同じ端末では`http://127.0.0.1:8000`を開きます。Tailscale内の別端末から接続する場合は、先にTailscale Serveを設定してHTTPSのURLを開きます。
+
+常用時はUvicornをsystemdで常駐させ、Tailscale Serveから`127.0.0.1:8000`へ転送します。Tailscaleの設定は [docs/tailscale-setup.md](docs/tailscale-setup.md) を参照してください。
+
+開発手順と現在の実装状況は [docs/development.md](docs/development.md) を参照してください。
 
 ## 想定API
 
 ```text
-POST /api/capture        写真を撮影する
-GET  /api/photos         保存済み写真の一覧を取得する
-GET  /photos/{photo_id}  写真を取得する
+POST   /api/capture             写真を撮影する
+GET    /api/photos              保存済み写真の一覧を取得する
+GET    /photos/{photo_id}       写真を取得する
 DELETE /api/photos/{photo_id}  写真を削除する
 ```
 
 USBカメラは既定で `/dev/video0` と `fswebcam` を使用します。
-
-> [!IMPORTANT]
-> Raspbian GNU/Linux 9 (Stretch) は古く、標準Pythonでは現在のFastAPIを実行できません。Raspberry Piへ配置する前に、OSを新しいRaspberry Pi OSのイメージで入れ直してください。メジャーバージョンをまたぐインプレース更新は前提にしません。
 
 ## セキュリティ方針
 
