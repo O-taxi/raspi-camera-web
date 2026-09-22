@@ -131,7 +131,7 @@ class Picamera2Service:
                     self.settings.live_stream_width,
                     self.settings.live_stream_height,
                 ),
-                "format": "RGB888",
+                "format": "YUV420",
             },
             controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
         )
@@ -192,13 +192,29 @@ class Picamera2Service:
         except ImportError as exc:
             raise RuntimeError("Pillow is required by the Picamera2 live stream") from exc
 
-        rgb_frame = frame[
-            : self.settings.live_stream_height,
-            : self.settings.live_stream_width,
-            :3,
-        ]
-        image = Image.fromarray(rgb_frame, "RGB")
-        luma = image.convert("L").tobytes()
+        width = self.settings.live_stream_width
+        height = self.settings.live_stream_height
+        if height % 4 != 0:
+            raise RuntimeError("LIVE_STREAM_HEIGHT must be divisible by four for YUV420")
+
+        luma_plane = frame[:height, :width]
+        chroma_matrix_rows = height // 4
+        u_plane = frame[height : height + chroma_matrix_rows, :width].reshape(
+            height // 2, width // 2
+        )
+        v_plane = frame[
+            height + chroma_matrix_rows : height + (2 * chroma_matrix_rows),
+            :width,
+        ].reshape(height // 2, width // 2)
+        luma = luma_plane.tobytes()
+        image = Image.merge(
+            "YCbCr",
+            (
+                Image.fromarray(luma_plane),
+                Image.fromarray(u_plane).resize((width, height), Image.BILINEAR),
+                Image.fromarray(v_plane).resize((width, height), Image.BILINEAR),
+            ),
+        ).convert("RGB")
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=75, optimize=False)
         return luma, buffer.getvalue()
