@@ -1,3 +1,8 @@
+---
+title: Tailscale Serve設定
+description: Tailscale内だけでカメラアプリへ接続する手順
+---
+
 # Tailscale Serve設定
 
 この文書では、Raspberry Pi上のWebアプリを同じtailnetの端末だけにHTTPSで公開する手順を扱います。

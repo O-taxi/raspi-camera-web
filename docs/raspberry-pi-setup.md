@@ -1,3 +1,8 @@
+---
+title: Raspberry Piとカメラのセットアップ
+description: USBカメラとCSIカメラの導入、systemd登録手順
+---
+
 # Raspberry Piとカメラのセットアップ
 
 ## 対象環境
@@ -101,7 +106,7 @@ uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 カメラが一覧に出ない場合は、リボンケーブルの接続、カメラモジュールとの互換性、Raspberry Pi OSを確認します。`/dev/video0`の有無や`video`グループはCSIカメラの判定には使いません。
 
-ライブ映像や動体検知録画を使う場合は、[動画・動体検知の運用](video-and-motion.md)に従ってPicamera2を準備します。
+ライブ映像や動体検知録画を使う場合は、[動画・動体検知の運用]({{ '/video-and-motion.html' | relative_url }})に従ってPicamera2を準備します。
 
 ## Raspberry Pi上で写真を見る
 
@@ -131,7 +136,7 @@ cd raspi-camera-web
 ./scripts/install_raspberry_pi_dependencies.sh
 ```
 
-このスクリプトは、USB／CSIカメラ用APTパッケージ、uv、ロック済みPython依存関係を導入します。Tailscaleの導入とtailnet認証は含めず、[Tailscale Serve設定](tailscale-setup.md)で個別に行います。
+このスクリプトは、USB／CSIカメラ用APTパッケージ、uv、ロック済みPython依存関係を導入します。Tailscaleの導入とtailnet認証は含めず、[Tailscale Serve設定]({{ '/tailscale-setup.html' | relative_url }})で個別に行います。
 
 手動起動で確認します。
 
@@ -201,7 +206,7 @@ journalctl -u raspi-camera-web.service -n 100 --no-pager
 curl --fail http://127.0.0.1:8000/
 ```
 
-アプリが起動したら、[Tailscale Serve設定](tailscale-setup.md)へ進みます。
+アプリが起動したら、[Tailscale Serve設定]({{ '/tailscale-setup.html' | relative_url }})へ進みます。
 
 ## 更新
 

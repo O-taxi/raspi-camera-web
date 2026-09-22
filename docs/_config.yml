@@ -1,0 +1,11 @@
+title: raspi-camera-web
+description: Raspberry Pi camera web application documentation
+lang: ja
+markdown: kramdown
+kramdown:
+  input: GFM
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

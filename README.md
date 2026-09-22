@@ -173,3 +173,7 @@ USBカメラの詳細、旧 Raspberry Pi OSの`libcamera-still`、systemd設定�
 ## 開発者向け情報
 
 実装方針と検証ルールは [AGENTS.md](AGENTS.md) に記載しています。
+
+## 公開ドキュメント
+
+`docs/`はGitHub Pages向けのJekyllサイトです。公開設定と、公開してはいけない情報は[GitHub Pagesでの公開](docs/github-pages.md)を参照してください。
