@@ -40,12 +40,14 @@ LIVE_STREAM_WIDTH=640 \
 LIVE_STREAM_HEIGHT=360 \
 LIVE_STREAM_FPS=5 \
 MOTION_THRESHOLD=12 \
-MOTION_MIN_CHANGED_RATIO=0.003 \
+MOTION_ANALYSIS_TILE_SIZE=32 \
+MOTION_MIN_CHANGED_RATIO=0.10 \
 MOTION_ILLUMINATION_CHANGED_RATIO=0.65 \
 MOTION_ILLUMINATION_DIRECTION_RATIO=0.90 \
 MOTION_SETTLE_SECONDS=5 \
 MOTION_MINIMUM_CONSECUTIVE_FRAMES=3 \
 MOTION_RECORD_SECONDS=20 \
+MOTION_MIN_RECORD_SECONDS=2 \
 MOTION_MAX_RECORD_SECONDS=60 \
 MOTION_ENABLED=true \
 uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -53,11 +55,11 @@ uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 `/stream.mjpg`をブラウザーで開くとカラーのライブ映像を確認できます。Picamera2の互換性のため、カメラからの低解像度ストリームはYUV420で取得し、輝度は動体検知へ、色差成分はブラウザー向けカラーMJPEGへ使います。録画終了時もライブ配信を止めず、録画用H.264エンコーダーだけを停止します。
 
-録画終了後、アプリ画面下部の「録画動画」に保存済みMP4が新しい順に表示されます。動画一覧は約10秒ごとに更新されます。「ダウンロード」を押すと、動画ファイルを端末へ保存できます。動画ファイルは既定で`data/videos/`に保存され、`GET /api/videos`で一覧、`GET /videos/{video_id}`でダウンロードできます。
+録画終了後、アプリ画面下部の「録画動画」に保存済みMP4が新しい順に表形式で表示されます。動画一覧は約10秒ごとに更新され、10件を超えるとページを切り替えられます。新規に録画した動画には時間も表示されます。「ダウンロード」アイコンを押すと、動画ファイルを端末へ保存できます。ゴミ箱アイコンでは確認後に動画を削除し、対応する再生時間メタデータも同時に削除します。動画ファイルは既定で`data/videos/`に保存され、`GET /api/videos`で一覧、`GET /videos/{video_id}`でダウンロード、`DELETE /api/videos/{video_id}`で削除できます。
 
 ## 動体検知の遠隔操作と録画上限
 
-Picamera2モードの画面には動体検知のON/OFF操作があります。OFFにすると、ライブ映像は継続したまま、新しい動体検知録画を開始しません。録画中にOFFへ切り替えた場合は、その録画を終了します。状態は`VIDEO_DIR`内の`.motion-state.json`へ保存するため、サービス再起動後も維持されます。
+Picamera2モードの画面には動体検知の開始・停止操作があります。確認ダイアログで確定すると、ライブ映像は継続したまま新しい動体検知録画を開始／停止します。停止時に録画開始直後であれば、`MOTION_MIN_RECORD_SECONDS`未満の動画は破棄して不要な短い動画を残しません。状態は`VIDEO_DIR`内の`.motion-state.json`へ保存するため、サービス再起動後も維持されます。
 
 APIを使う場合は、現在の状態を`GET /api/motion`で取得し、次のように`PUT /api/motion`で切り替えられます。
 
@@ -67,17 +69,17 @@ curl --request PUT http://127.0.0.1:8000/api/motion \
   --data '{"enabled": false}'
 ```
 
-`MOTION_MAX_RECORD_SECONDS`は、動きが継続しても1本の動画を必ず終了する絶対上限です。`MOTION_RECORD_SECONDS`（最後に動きを検知してから録画を続ける秒数）以上に設定してください。既定値は60秒です。録画終了後は既存の`MOTION_COOLDOWN_SECONDS`の間、新たな録画を開始しません。
+`MOTION_MAX_RECORD_SECONDS`は、動きが継続しても1本の動画を必ず終了する絶対上限です。`MOTION_RECORD_SECONDS`（最後に動きを検知してから録画を続ける秒数）以上に設定してください。既定値は60秒です。`MOTION_MIN_RECORD_SECONDS`は保存する最小動画時間で、既定値は2秒です。録画終了後は既存の`MOTION_COOLDOWN_SECONDS`の間、新たな録画を開始しません。
 
-ケージ内の小さく短い動きを記録したい場合は、最初は`MOTION_MINIMUM_CONSECUTIVE_FRAMES=2`に下げ、`MOTION_THRESHOLD`を少しずつ下げながら実機映像で調整してください。ケージ外の動きや照明変化による誤検知が多い場合は、次段階として検知エリア指定を追加します。
+ケージ内の小さく短い動きを記録したい場合は、最初は`MOTION_MINIMUM_CONSECUTIVE_FRAMES=2`に下げてください。見逃しがあるときだけ、`MOTION_THRESHOLD`を少しずつ下げるか、`MOTION_MIN_CHANGED_RATIO`を`0.10`から下げて実機映像で調整します。ケージ外の動きや照明変化による誤検知が多い場合は、次段階として検知エリア指定を追加します。
 
 ## 照明変化の除外
 
-動体検知は、間引いた輝度画素ごとの差を調べます。`MOTION_THRESHOLD`以上に変化した画素の割合が`MOTION_MIN_CHANGED_RATIO`以上なら、通常の動きの候補です。この方式により、小さな領域だけが動く場合も調整できます。
+動体検知は、間引いた輝度画素ごとの差を調べます。画面を`MOTION_ANALYSIS_TILE_SIZE`（既定32ピクセル）ごとの小領域へ分け、1つでも小領域内で`MOTION_THRESHOLD`以上に変化した画素の割合が`MOTION_MIN_CHANGED_RATIO`（既定10%）以上なら、通常の動きの候補です。小さなヤモリの動きは残しつつ、画面全体に散らばるセンサーノイズや微小な露出揺れでは録画しにくくします。
 
 一方で、`MOTION_ILLUMINATION_CHANGED_RATIO`以上の画素が変化し、そのうち`MOTION_ILLUMINATION_DIRECTION_RATIO`以上が同時に明るくなる、または暗くなる場合は、照明ON/OFF・カーテン・自動露出などによる全体的な明るさ変化として除外します。検出後は`MOTION_SETTLE_SECONDS`の間、新規録画を開始せず、直後の露出調整による連続誤検知を防ぎます。
 
-既定値は、全体の65%以上が同方向へ変化した場合に照明変化と判断し、5秒間待機します。ケージ内のヤモリ向けには、まず`MOTION_MIN_CHANGED_RATIO=0.003`、`MOTION_MINIMUM_CONSECUTIVE_FRAMES=2`で試し、照明変化が残る場合は`MOTION_ILLUMINATION_CHANGED_RATIO`を下げてください。画角にケージ外が大きく入る場合の検知エリア指定は、別の機能として追加できます。
+既定値は、全体の65%以上が同方向へ変化した場合に照明変化と判断し、5秒間待機します。ケージ内のヤモリ向けには、まず`MOTION_ANALYSIS_TILE_SIZE=32`、`MOTION_MIN_CHANGED_RATIO=0.10`、`MOTION_MINIMUM_CONSECUTIVE_FRAMES=2`で試してください。画角にケージ外が大きく入る場合の検知エリア指定は、別の機能として追加できます。
 
 ## systemd設定
 

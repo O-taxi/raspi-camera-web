@@ -38,11 +38,6 @@
         </button>
       </section>
 
-      <section id="latest" class="latest" aria-live="polite" hidden>
-        <img id="latest-image" alt="直近に撮影したカメラ画像">
-        <p id="latest-time"></p>
-      </section>
-
       <section aria-labelledby="gallery-title">
         <div class="section-heading">
           <h2 id="gallery-title">撮影履歴</h2>
@@ -61,8 +56,24 @@
         <div class="section-heading">
           <h2 id="video-history-title">録画動画</h2>
         </div>
-        <div id="video-list" class="video-list"></div>
+        <div class="video-table-wrap">
+          <table class="video-table">
+            <thead>
+              <tr>
+                <th scope="col">撮影日時</th>
+                <th scope="col">時間</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody id="video-list"></tbody>
+          </table>
+        </div>
         <p id="empty-video-message" class="empty-message">保存された動画はありません。</p>
+        <nav id="video-pagination" class="pagination" aria-label="録画動画のページ" hidden>
+          <button id="previous-video-page" class="secondary-button" type="button">前へ</button>
+          <span id="video-page-info" aria-live="polite"></span>
+          <button id="next-video-page" class="secondary-button" type="button">次へ</button>
+        </nav>
       </section>
       {% endif %}
     </main>

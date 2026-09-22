@@ -182,6 +182,7 @@ def test_finishing_recording_keeps_camera_running(settings, tmp_path: Path) -> N
     service._recording = _Recording(
         video_id,
         temporary_path,
+        started_at=0.0,
         deadline=0.0,
         maximum_deadline=0.0,
     )
@@ -212,12 +213,47 @@ async def test_motion_detection_setting_is_persisted(settings, tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_disabling_motion_discards_a_short_recording(settings, tmp_path: Path) -> None:
+    motion_settings = replace(
+        settings,
+        motion_state_path=tmp_path / ".motion-state.json",
+        motion_min_record_seconds=2,
+    )
+    video_store = VideoStore(tmp_path / "videos", 3)
+    service = Picamera2Service(motion_settings, video_store)
+    video_id = "20260923-120000-12345678"
+    temporary_path = video_store.path_for_recording(video_id)
+    temporary_path.write_bytes(b"video")
+
+    class Camera:
+        def stop_encoder(self, _encoder: object) -> None:
+            pass
+
+    service._camera = Camera()
+    service._recording = _Recording(
+        video_id,
+        temporary_path,
+        started_at=100.0,
+        deadline=120.0,
+        maximum_deadline=160.0,
+    )
+    service._recording_encoder = object()
+
+    with patch("app.services.picamera2.time.monotonic", return_value=101.0):
+        await service.set_motion_enabled(False)
+
+    assert video_store.resolve(video_id) is None
+    assert not temporary_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_recording_stops_at_its_absolute_time_limit(settings, tmp_path: Path) -> None:
     video_store = VideoStore(tmp_path / "videos", 3)
     service = Picamera2Service(settings, video_store)
     service._recording = _Recording(
         "20260923-120000-12345678",
         video_store.path_for_recording("20260923-120000-12345678"),
+        started_at=0.0,
         deadline=20.0,
         maximum_deadline=10.0,
     )
@@ -250,21 +286,44 @@ def test_global_brightness_change_is_not_motion(settings, tmp_path: Path) -> Non
 def test_local_motion_uses_changed_pixel_ratio(settings, tmp_path: Path) -> None:
     motion_settings = replace(
         settings,
+        live_stream_width=64,
         motion_threshold=10.0,
-        motion_min_changed_ratio=0.01,
-        motion_minimum_consecutive_frames=2,
+        motion_analysis_tile_size=16,
+        motion_min_changed_ratio=0.10,
+        motion_minimum_consecutive_frames=1,
     )
     service = Picamera2Service(motion_settings, VideoStore(tmp_path / "videos", 3))
-    first_frame = bytes(1_000)
+    first_frame = bytes(64 * 64)
     second_frame = bytearray(first_frame)
-    third_frame = bytearray(first_frame)
-    for index in range(0, 40, MOTION_SAMPLE_STRIDE):
-        second_frame[index] = 20
+    for y in range(16):
+        for x in range(0, 16, MOTION_SAMPLE_STRIDE):
+            second_frame[y * 64 + x] = 20
 
     service._previous_luma = first_frame
     with patch("app.services.picamera2.time.monotonic", return_value=100.0):
-        first_detection = service._detect_motion(bytes(second_frame))
-        second_detection = service._detect_motion(bytes(third_frame))
+        detected = service._detect_motion(bytes(second_frame))
 
-    assert not first_detection
-    assert second_detection
+    assert detected
+
+
+def test_scattered_pixel_noise_does_not_trigger_motion(settings, tmp_path: Path) -> None:
+    motion_settings = replace(
+        settings,
+        live_stream_width=64,
+        motion_threshold=10.0,
+        motion_analysis_tile_size=16,
+        motion_min_changed_ratio=0.10,
+        motion_minimum_consecutive_frames=1,
+    )
+    service = Picamera2Service(motion_settings, VideoStore(tmp_path / "videos", 3))
+    first_frame = bytes(64 * 64)
+    noisy_frame = bytearray(first_frame)
+    for y in range(0, 64, 16):
+        for x in range(0, 64, 16):
+            noisy_frame[y * 64 + x] = 20
+
+    service._previous_luma = first_frame
+    with patch("app.services.picamera2.time.monotonic", return_value=100.0):
+        detected = service._detect_motion(bytes(noisy_frame))
+
+    assert not detected

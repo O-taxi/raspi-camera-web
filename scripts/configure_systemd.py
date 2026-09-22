@@ -12,6 +12,8 @@
     --photo-dir PATH             写真保存先を指定する。
     --video-dir PATH             動画保存先を指定する。
     --motion-max-record-seconds N  1本の動体検知録画の上限秒数を指定する。
+    --motion-min-record-seconds N  保存する最小動画時間を指定する。
+    --motion-analysis-tile-size N 検知する小領域の一辺を指定する。
     --motion-settle-seconds N    照明変化後の検知待機秒数を指定する。
     --[no-]motion-enabled        動体検知の既定の有効状態を指定する。
     --force                      既存のunitと環境ファイルを上書きする。
@@ -98,12 +100,14 @@ def build_environment(args: argparse.Namespace, photo_dir: Path, video_dir: Path
         ("LIVE_STREAM_HEIGHT", args.live_stream_height),
         ("LIVE_STREAM_FPS", args.live_stream_fps),
         ("MOTION_THRESHOLD", args.motion_threshold),
+        ("MOTION_ANALYSIS_TILE_SIZE", args.motion_analysis_tile_size),
         ("MOTION_MIN_CHANGED_RATIO", args.motion_min_changed_ratio),
         ("MOTION_ILLUMINATION_CHANGED_RATIO", args.motion_illumination_changed_ratio),
         ("MOTION_ILLUMINATION_DIRECTION_RATIO", args.motion_illumination_direction_ratio),
         ("MOTION_SETTLE_SECONDS", args.motion_settle_seconds),
         ("MOTION_MINIMUM_CONSECUTIVE_FRAMES", args.motion_minimum_consecutive_frames),
         ("MOTION_RECORD_SECONDS", args.motion_record_seconds),
+        ("MOTION_MIN_RECORD_SECONDS", args.motion_min_record_seconds),
         ("MOTION_MAX_RECORD_SECONDS", args.motion_max_record_seconds),
         ("MOTION_COOLDOWN_SECONDS", args.motion_cooldown_seconds),
         ("MOTION_ENABLED", args.motion_enabled),
@@ -194,12 +198,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--live-stream-height", type=_positive_int, default=360)
     parser.add_argument("--live-stream-fps", type=_positive_int, default=5)
     parser.add_argument("--motion-threshold", type=_positive_float, default=12.0)
-    parser.add_argument("--motion-min-changed-ratio", type=_ratio, default=0.003)
+    parser.add_argument("--motion-analysis-tile-size", type=_positive_int, default=32)
+    parser.add_argument("--motion-min-changed-ratio", type=_ratio, default=0.10)
     parser.add_argument("--motion-illumination-changed-ratio", type=_ratio, default=0.65)
     parser.add_argument("--motion-illumination-direction-ratio", type=_ratio, default=0.90)
     parser.add_argument("--motion-settle-seconds", type=_positive_int, default=5)
     parser.add_argument("--motion-minimum-consecutive-frames", type=_positive_int, default=3)
     parser.add_argument("--motion-record-seconds", type=_positive_int, default=20)
+    parser.add_argument("--motion-min-record-seconds", type=_positive_int, default=2)
     parser.add_argument("--motion-max-record-seconds", type=_positive_int, default=60)
     parser.add_argument("--motion-cooldown-seconds", type=_positive_int, default=30)
     parser.add_argument(
@@ -231,6 +237,12 @@ def main() -> int:
     if args.motion_max_record_seconds < args.motion_record_seconds:
         print(
             "エラー: --motion-max-record-secondsは--motion-record-seconds以上にしてください。",
+            file=sys.stderr,
+        )
+        return 2
+    if args.motion_min_record_seconds > args.motion_record_seconds:
+        print(
+            "エラー: --motion-min-record-secondsは--motion-record-seconds以下にしてください。",
             file=sys.stderr,
         )
         return 2

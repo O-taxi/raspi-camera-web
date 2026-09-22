@@ -39,6 +39,7 @@ class VideoResponse(BaseModel):
     id: str
     captured_at: str
     url: str
+    duration_seconds: int | None
 
 
 class MotionStatusResponse(BaseModel):
@@ -193,6 +194,19 @@ def create_app(
         if video_store is None:
             return []
         return [VideoResponse(**asdict(video)) for video in video_store.list_videos()]
+
+    @application.delete(
+        "/api/videos/{video_id}",
+        status_code=204,
+        response_class=Response,
+        responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    )
+    async def delete_video(video_id: str, request: Request) -> Response:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site deletion is not allowed")
+        if video_store is None or not video_store.delete(video_id):
+            raise HTTPException(status_code=404, detail="Video not found")
+        return Response(status_code=204)
 
     @application.get("/videos/{video_id}", response_class=FileResponse)
     async def video(video_id: str) -> FileResponse:

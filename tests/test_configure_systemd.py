@@ -59,12 +59,14 @@ def test_build_environment_contains_camera_settings() -> None:
         live_stream_height=360,
         live_stream_fps=5,
         motion_threshold=12.0,
-        motion_min_changed_ratio=0.003,
+        motion_analysis_tile_size=32,
+        motion_min_changed_ratio=0.10,
         motion_illumination_changed_ratio=0.65,
         motion_illumination_direction_ratio=0.90,
         motion_settle_seconds=5,
         motion_minimum_consecutive_frames=3,
         motion_record_seconds=20,
+        motion_min_record_seconds=2,
         motion_max_record_seconds=60,
         motion_cooldown_seconds=30,
         motion_enabled=True,
@@ -79,6 +81,7 @@ def test_build_environment_contains_camera_settings() -> None:
     assert 'CAMERA_CAPTURE_DELAY_MS="1000"' in environment
     assert 'VIDEO_DIR="/srv/videos"' in environment
     assert 'MOTION_MAX_RECORD_SECONDS="60"' in environment
+    assert 'MOTION_ANALYSIS_TILE_SIZE="32"' in environment
     assert 'MOTION_ENABLED="True"' in environment
 
 
@@ -102,12 +105,14 @@ def test_build_environment_defaults_to_rpicam_still_for_csi_camera() -> None:
         live_stream_height=360,
         live_stream_fps=5,
         motion_threshold=12.0,
-        motion_min_changed_ratio=0.003,
+        motion_analysis_tile_size=32,
+        motion_min_changed_ratio=0.10,
         motion_illumination_changed_ratio=0.65,
         motion_illumination_direction_ratio=0.90,
         motion_settle_seconds=5,
         motion_minimum_consecutive_frames=3,
         motion_record_seconds=20,
+        motion_min_record_seconds=2,
         motion_max_record_seconds=60,
         motion_cooldown_seconds=30,
         motion_enabled=True,
@@ -138,12 +143,14 @@ def test_build_environment_adds_system_packages_for_picamera2() -> None:
         live_stream_height=360,
         live_stream_fps=5,
         motion_threshold=12.0,
-        motion_min_changed_ratio=0.003,
+        motion_analysis_tile_size=32,
+        motion_min_changed_ratio=0.10,
         motion_illumination_changed_ratio=0.65,
         motion_illumination_direction_ratio=0.90,
         motion_settle_seconds=5,
         motion_minimum_consecutive_frames=3,
         motion_record_seconds=20,
+        motion_min_record_seconds=2,
         motion_max_record_seconds=60,
         motion_cooldown_seconds=30,
         motion_enabled=True,

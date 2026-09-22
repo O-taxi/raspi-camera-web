@@ -1,9 +1,6 @@
 const captureButton = document.querySelector("#capture-button");
 const captureLabel = document.querySelector("#capture-label");
 const statusMessage = document.querySelector("#status");
-const latestSection = document.querySelector("#latest");
-const latestImage = document.querySelector("#latest-image");
-const latestTime = document.querySelector("#latest-time");
 const gallery = document.querySelector("#gallery");
 const emptyMessage = document.querySelector("#empty-message");
 const pagination = document.querySelector("#pagination");
@@ -17,15 +14,21 @@ const closeDialogButton = document.querySelector("#close-dialog");
 const deletePhotoButton = document.querySelector("#delete-photo");
 const videoList = document.querySelector("#video-list");
 const emptyVideoMessage = document.querySelector("#empty-video-message");
+const videoTableWrap = document.querySelector(".video-table-wrap");
+const videoPagination = document.querySelector("#video-pagination");
+const previousVideoPageButton = document.querySelector("#previous-video-page");
+const nextVideoPageButton = document.querySelector("#next-video-page");
+const videoPageInfo = document.querySelector("#video-page-info");
 const motionToggle = document.querySelector("#motion-toggle");
 
 const photosPerPage = 8;
+const videosPerPage = 10;
 let photos = [];
 let videos = [];
 let motionEnabled = null;
 let currentPage = 1;
+let currentVideoPage = 1;
 let selectedPhoto = null;
-let latestPhotoId = null;
 let statusTimer = null;
 let cooldownTimer = null;
 let cooldownEndsAt = 0;
@@ -35,6 +38,17 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function formatDuration(seconds) {
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    return "—";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes > 0
+    ? `${minutes}:${String(remainingSeconds).padStart(2, "0")}`
+    : `${remainingSeconds}秒`;
 }
 
 function setStatus(message, isError = false) {
@@ -124,33 +138,68 @@ async function loadPhotos() {
 }
 
 function renderVideos() {
-  if (videoList === null || emptyVideoMessage === null) {
+  if (
+    videoList === null
+    || emptyVideoMessage === null
+    || videoTableWrap === null
+    || videoPagination === null
+    || previousVideoPageButton === null
+    || nextVideoPageButton === null
+    || videoPageInfo === null
+  ) {
     return;
   }
 
   videoList.replaceChildren();
   emptyVideoMessage.hidden = videos.length > 0;
+  videoTableWrap.hidden = videos.length === 0;
+  const totalPages = Math.max(1, Math.ceil(videos.length / videosPerPage));
+  currentVideoPage = Math.min(currentVideoPage, totalPages);
+  const firstVideo = (currentVideoPage - 1) * videosPerPage;
+  const visibleVideos = videos.slice(firstVideo, firstVideo + videosPerPage);
 
-  for (const video of videos) {
-    const card = document.createElement("article");
-    const details = document.createElement("div");
-    const time = document.createElement("p");
-    const format = document.createElement("p");
+  for (const video of visibleVideos) {
+    const row = document.createElement("tr");
+    const time = document.createElement("td");
+    const duration = document.createElement("td");
+    const actions = document.createElement("td");
     const downloadLink = document.createElement("a");
+    const downloadIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const downloadPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const deleteButton = document.createElement("button");
+    const deleteIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const deletePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
 
-    card.className = "video-card";
-    details.className = "video-details";
     time.textContent = formatDate(video.captured_at);
-    format.textContent = "MP4";
+    duration.textContent = formatDuration(video.duration_seconds);
+    actions.className = "video-actions";
     downloadLink.className = "download-button";
     downloadLink.href = video.url;
     downloadLink.download = `${video.id}.mp4`;
-    downloadLink.textContent = "ダウンロード";
     downloadLink.setAttribute("aria-label", `${formatDate(video.captured_at)}の動画をダウンロード`);
-    details.append(time, format);
-    card.append(details, downloadLink);
-    videoList.append(card);
+    downloadIcon.setAttribute("viewBox", "0 0 24 24");
+    downloadIcon.setAttribute("aria-hidden", "true");
+    downloadPath.setAttribute("d", "M12 3v12m0 0 4-4m-4 4-4-4M5 21h14");
+    downloadIcon.append(downloadPath);
+    downloadLink.append(downloadIcon);
+    deleteButton.className = "delete-video-button";
+    deleteButton.type = "button";
+    deleteButton.setAttribute("aria-label", `${formatDate(video.captured_at)}の動画を削除`);
+    deleteButton.addEventListener("click", () => deleteVideo(video, deleteButton));
+    deleteIcon.setAttribute("viewBox", "0 0 24 24");
+    deleteIcon.setAttribute("aria-hidden", "true");
+    deletePath.setAttribute("d", "M4 7h16M10 11v6m4-6v6M9 7V4h6v3m-9 0 1 14h10l1-14");
+    deleteIcon.append(deletePath);
+    deleteButton.append(deleteIcon);
+    actions.append(downloadLink, deleteButton);
+    row.append(time, duration, actions);
+    videoList.append(row);
   }
+
+  videoPagination.hidden = videos.length <= videosPerPage;
+  videoPageInfo.textContent = `${currentVideoPage} / ${totalPages}`;
+  previousVideoPageButton.disabled = currentVideoPage === 1;
+  nextVideoPageButton.disabled = currentVideoPage === totalPages;
 }
 
 async function loadVideos() {
@@ -170,6 +219,30 @@ async function loadVideos() {
   }
 }
 
+async function deleteVideo(video, deleteButton) {
+  if (!window.confirm(`${formatDate(video.captured_at)}の動画を削除しますか？`)) {
+    return;
+  }
+
+  deleteButton.disabled = true;
+  try {
+    const response = await fetch(`/api/videos/${encodeURIComponent(video.id)}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      const payload = await response.json();
+      throw new Error(payload.detail || "動画を削除できませんでした。");
+    }
+
+    setStatus("動画を削除しました。");
+    await loadVideos();
+  } catch (error) {
+    setStatus(error.message, true);
+    deleteButton.disabled = false;
+  }
+}
+
 function renderMotionToggle() {
   if (motionToggle === null || motionEnabled === null) {
     return;
@@ -179,8 +252,8 @@ function renderMotionToggle() {
   motionToggle.classList.toggle("enabled", motionEnabled);
   motionToggle.setAttribute("aria-pressed", String(motionEnabled));
   motionToggle.textContent = motionEnabled
-    ? "動体検知: ON（停止）"
-    : "動体検知: OFF（開始）";
+    ? "動体検知を停止"
+    : "動体検知を開始";
 }
 
 async function loadMotionStatus() {
@@ -208,6 +281,10 @@ async function toggleMotionDetection() {
   }
 
   const nextEnabled = !motionEnabled;
+  const action = nextEnabled ? "開始" : "停止";
+  if (!window.confirm(`動体検知を${action}しますか？`)) {
+    return;
+  }
   motionToggle.disabled = true;
   try {
     const response = await fetch("/api/motion", {
@@ -247,10 +324,6 @@ async function capturePhoto() {
       throw new Error(payload.detail || "撮影に失敗しました。");
     }
 
-    latestImage.src = `${payload.url}?v=${encodeURIComponent(payload.id)}`;
-    latestTime.textContent = formatDate(payload.captured_at);
-    latestPhotoId = payload.id;
-    latestSection.hidden = false;
     setStatus("撮影しました。");
     currentPage = 1;
     await loadPhotos();
@@ -287,10 +360,6 @@ async function deleteSelectedPhoto() {
       throw new Error(payload.detail || "写真を削除できませんでした。");
     }
 
-    if (latestPhotoId === selectedPhoto.id) {
-      latestSection.hidden = true;
-      latestPhotoId = null;
-    }
     selectedPhoto = null;
     photoDialog.close();
     setStatus("写真を削除しました。");
@@ -311,6 +380,16 @@ nextPageButton.addEventListener("click", () => {
   currentPage += 1;
   renderGallery();
 });
+if (previousVideoPageButton !== null && nextVideoPageButton !== null) {
+  previousVideoPageButton.addEventListener("click", () => {
+    currentVideoPage -= 1;
+    renderVideos();
+  });
+  nextVideoPageButton.addEventListener("click", () => {
+    currentVideoPage += 1;
+    renderVideos();
+  });
+}
 closeDialogButton.addEventListener("click", () => photoDialog.close());
 deletePhotoButton.addEventListener("click", deleteSelectedPhoto);
 if (motionToggle !== null) {

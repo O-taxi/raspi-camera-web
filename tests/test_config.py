@@ -49,6 +49,8 @@ def test_motion_configuration_reads_boolean_and_validates_recording_limit(monkey
     settings = Settings.from_environment()
 
     assert not settings.motion_enabled
+    assert settings.motion_analysis_tile_size == 32
+    assert settings.motion_min_changed_ratio == 0.10
     assert settings.motion_max_record_seconds == 60
 
     monkeypatch.setenv("MOTION_MAX_RECORD_SECONDS", "20")

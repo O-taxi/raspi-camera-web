@@ -195,9 +195,49 @@ async def test_list_and_download_recorded_videos(settings, tmp_path: Path) -> No
     assert len(videos) == 1
     assert videos[0]["id"] == video_id
     assert videos[0]["url"] == f"/videos/{video_id}"
+    assert videos[0]["duration_seconds"] is None
     assert download_response.status_code == 200
     assert download_response.content == b"mp4"
     assert f'filename="{video_id}.mp4"' in download_response.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
+async def test_delete_recorded_video_removes_its_duration(settings, tmp_path: Path) -> None:
+    video_settings = replace(
+        settings,
+        camera_backend="picamera2",
+        video_dir=tmp_path / "videos",
+    )
+    store = VideoStore(video_settings.video_dir, video_settings.maximum_videos)
+    video_id = "20260923-120000-12345678"
+    store.path_for_new_video(video_id).write_bytes(b"mp4")
+    store.set_duration(video_id, 7)
+    application = create_app(video_settings)
+
+    response = await asgi_request(application, "DELETE", f"/api/videos/{video_id}")
+
+    assert response.status_code == 204
+    assert store.resolve(video_id) is None
+    assert video_id not in store._load_durations()
+
+
+@pytest.mark.asyncio
+async def test_delete_video_rejects_cross_site_request(settings, tmp_path: Path) -> None:
+    video_settings = replace(
+        settings,
+        camera_backend="picamera2",
+        video_dir=tmp_path / "videos",
+    )
+    application = create_app(video_settings)
+
+    response = await asgi_request(
+        application,
+        "DELETE",
+        "/api/videos/20260923-120000-12345678",
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio

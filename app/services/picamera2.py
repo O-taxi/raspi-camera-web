@@ -25,6 +25,7 @@ MOTION_SAMPLE_STRIDE = 4
 class _Recording:
     video_id: str
     temporary_path: Path
+    started_at: float
     deadline: float
     maximum_deadline: float
 
@@ -88,8 +89,13 @@ class Picamera2Service:
         self._previous_luma = None
         self._motion_frames = 0
         self._motion_settling_until = 0.0
-        if not enabled and self._recording is not None:
-            await asyncio.to_thread(self._finish_recording)
+        recording = self._recording
+        if not enabled and recording is not None:
+            discard = (
+                time.monotonic() - recording.started_at
+                < self.settings.motion_min_record_seconds
+            )
+            await asyncio.to_thread(self._finish_recording, discard)
         return self._motion_enabled
 
     async def mjpeg_frames(self) -> AsyncIterator[bytes]:
@@ -229,12 +235,19 @@ class Picamera2Service:
         brightened_pixels = 0
         darkened_pixels = 0
         sample_count = 0
+        tile_sample_counts: dict[tuple[int, int], int] = {}
+        tile_changed_counts: dict[tuple[int, int], int] = {}
+        width = self.settings.live_stream_width
+        tile_size = self.settings.motion_analysis_tile_size
         for index in range(0, len(current_luma), MOTION_SAMPLE_STRIDE):
             difference = current_luma[index] - previous_luma[index]
             sample_count += 1
+            tile = ((index % width) // tile_size, (index // width) // tile_size)
+            tile_sample_counts[tile] = tile_sample_counts.get(tile, 0) + 1
             if abs(difference) < self.settings.motion_threshold:
                 continue
             changed_pixels += 1
+            tile_changed_counts[tile] = tile_changed_counts.get(tile, 0) + 1
             if difference > 0:
                 brightened_pixels += 1
             else:
@@ -259,7 +272,11 @@ class Picamera2Service:
             self._motion_frames = 0
             return False
 
-        if changed_ratio >= self.settings.motion_min_changed_ratio:
+        largest_tile_changed_ratio = max(
+            changed_count / tile_sample_counts[tile]
+            for tile, changed_count in tile_changed_counts.items()
+        )
+        if largest_tile_changed_ratio >= self.settings.motion_min_changed_ratio:
             self._motion_frames += 1
         else:
             self._motion_frames = 0
@@ -305,11 +322,12 @@ class Picamera2Service:
             self._recording = _Recording(
                 video_id=video_id,
                 temporary_path=temporary_path,
+                started_at=now,
                 deadline=now + self.settings.motion_record_seconds,
                 maximum_deadline=now + self.settings.motion_max_record_seconds,
             )
 
-    def _finish_recording(self) -> None:
+    def _finish_recording(self, discard: bool = False) -> None:
         recording = self._recording
         camera = self._camera
         if recording is None or camera is None:
@@ -319,8 +337,15 @@ class Picamera2Service:
                 if self._recording_encoder is not None:
                     camera.stop_encoder(self._recording_encoder)
             final_path = self.video_store.path_for_new_video(recording.video_id)
-            if recording.temporary_path.is_file() and recording.temporary_path.stat().st_size > 0:
+            duration_seconds = time.monotonic() - recording.started_at
+            if (
+                not discard
+                and duration_seconds >= self.settings.motion_min_record_seconds
+                and recording.temporary_path.is_file()
+                and recording.temporary_path.stat().st_size > 0
+            ):
                 recording.temporary_path.replace(final_path)
+                self.video_store.set_duration(recording.video_id, duration_seconds)
                 self.video_store.remove_excess()
             else:
                 recording.temporary_path.unlink(missing_ok=True)

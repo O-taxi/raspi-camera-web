@@ -96,12 +96,14 @@ class Settings:
     live_stream_height: int = 360
     live_stream_fps: int = 5
     motion_threshold: float = 12.0
-    motion_min_changed_ratio: float = 0.003
+    motion_analysis_tile_size: int = 32
+    motion_min_changed_ratio: float = 0.10
     motion_illumination_changed_ratio: float = 0.65
     motion_illumination_direction_ratio: float = 0.90
     motion_settle_seconds: int = 5
     motion_minimum_consecutive_frames: int = 3
     motion_record_seconds: int = 20
+    motion_min_record_seconds: int = 2
     motion_max_record_seconds: int = 60
     motion_cooldown_seconds: int = 30
     motion_enabled: bool = True
@@ -112,9 +114,12 @@ class Settings:
         camera_backend = _camera_backend()
         video_dir = Path(os.getenv("VIDEO_DIR", PROJECT_ROOT / "data" / "videos"))
         motion_record_seconds = _positive_int("MOTION_RECORD_SECONDS", 20)
+        motion_min_record_seconds = _positive_int("MOTION_MIN_RECORD_SECONDS", 2)
         motion_max_record_seconds = _positive_int("MOTION_MAX_RECORD_SECONDS", 60)
         if motion_max_record_seconds < motion_record_seconds:
             raise ValueError("MOTION_MAX_RECORD_SECONDS must be at least MOTION_RECORD_SECONDS")
+        if motion_min_record_seconds > motion_record_seconds:
+            raise ValueError("MOTION_MIN_RECORD_SECONDS must not exceed MOTION_RECORD_SECONDS")
         return cls(
             photo_dir=Path(os.getenv("PHOTO_DIR", PROJECT_ROOT / "data" / "photos")),
             camera_backend=camera_backend,
@@ -138,7 +143,8 @@ class Settings:
             live_stream_height=_positive_int("LIVE_STREAM_HEIGHT", 360),
             live_stream_fps=_positive_int("LIVE_STREAM_FPS", 5),
             motion_threshold=_positive_float("MOTION_THRESHOLD", 12.0),
-            motion_min_changed_ratio=_ratio("MOTION_MIN_CHANGED_RATIO", 0.003),
+            motion_analysis_tile_size=_positive_int("MOTION_ANALYSIS_TILE_SIZE", 32),
+            motion_min_changed_ratio=_ratio("MOTION_MIN_CHANGED_RATIO", 0.10),
             motion_illumination_changed_ratio=_ratio(
                 "MOTION_ILLUMINATION_CHANGED_RATIO", 0.65
             ),
@@ -150,6 +156,7 @@ class Settings:
                 "MOTION_MINIMUM_CONSECUTIVE_FRAMES", 3
             ),
             motion_record_seconds=motion_record_seconds,
+            motion_min_record_seconds=motion_min_record_seconds,
             motion_max_record_seconds=motion_max_record_seconds,
             motion_cooldown_seconds=_positive_int("MOTION_COOLDOWN_SECONDS", 30),
             motion_enabled=_boolean("MOTION_ENABLED", True),
