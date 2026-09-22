@@ -196,7 +196,7 @@ uv run python scripts/configure_systemd.py \
   --enable-now
 ```
 
-指定可能な設定は`uv run python scripts/configure_systemd.py --help`で確認できます。書き込みが必要な処理だけスクリプトから`sudo`を呼び出します。環境ファイルはroot所有のモード`0600`、unitはモード`0644`で作成されます。写真ディレクトリも作成し、サービス実行ユーザーが所有するよう設定します。
+指定可能な設定は`uv run python scripts/configure_systemd.py --help`で確認できます。書き込みが必要な処理だけスクリプトから`sudo`を呼び出します。環境ファイルはroot所有のモード`0600`、unitはモード`0644`で作成されます。写真ディレクトリも作成し、サービス実行ユーザーが所有するよう設定します。unitはuvの一時キャッシュをサービス専用の`/run/raspi-camera-web/`へ置くため、ホームディレクトリを読み取り専用に保ったまま起動できます。
 
 状態とログを確認します。
 

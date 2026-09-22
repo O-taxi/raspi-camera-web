@@ -8,7 +8,9 @@ def test_render_unit_replaces_host_specific_values() -> None:
     template = (
         "User=<your-user>\nGroup=<your-group>\nWorkingDirectory=<project-dir>\n"
         "ReadWritePaths=<photo-dir> <video-dir>\nEnvironmentFile=-<env-file>\n"
-        "Environment=PATH=<uv-bin-dir>:/usr/bin\nExecStart=/usr/bin/env uv run\n"
+        "Environment=PATH=<uv-bin-dir>:/usr/bin\n"
+        "Environment=UV_CACHE_DIR=/run/raspi-camera-web/uv-cache\n"
+        "RuntimeDirectory=raspi-camera-web\nExecStart=/usr/bin/env uv run\n"
     )
 
     rendered = render_unit(
@@ -31,6 +33,8 @@ def test_render_unit_replaces_host_specific_values() -> None:
     )
     assert "EnvironmentFile=-/etc/raspi-camera-web.env" in rendered
     assert "Environment=PATH=/home/camera-user/.local/bin:/usr/bin" in rendered
+    assert "Environment=UV_CACHE_DIR=/run/raspi-camera-web/uv-cache" in rendered
+    assert "RuntimeDirectory=raspi-camera-web" in rendered
     assert "ExecStart=/usr/bin/env uv run" in rendered
     assert "<" not in rendered
 

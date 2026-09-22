@@ -10,9 +10,11 @@ Group=<your-group>
 WorkingDirectory=<project-dir>
 EnvironmentFile=-<env-file>
 Environment=PATH=<uv-bin-dir>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=UV_CACHE_DIR=/run/raspi-camera-web/uv-cache
 ExecStart=/usr/bin/env uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5
+RuntimeDirectory=raspi-camera-web
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
