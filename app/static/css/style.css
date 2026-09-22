@@ -288,7 +288,7 @@ h2 {
 
 .video-table th:last-child,
 .video-table td:last-child {
-  width: 1%;
+  width: 6.5rem;
   text-align: right;
 }
 

@@ -175,6 +175,8 @@ uv run python scripts/configure_systemd.py --enable-now
 uv run python scripts/configure_systemd.py --enable-now --force
 ```
 
+`--enable-now`はunitを有効化し、すでに起動中の場合も必ず再起動して、更新したunit・環境設定・アプリコードを反映します。
+
 カメラや保存設定はコマンドライン引数で変更できます。
 
 ```bash

@@ -6,7 +6,7 @@
 
 主要引数:
     --dry-run                    生成内容だけを表示して書き込まない。
-    --enable-now                 生成後にsystemdを有効化して起動する。
+    --enable-now                 生成後にsystemdを有効化し、サービスを再起動する。
     --camera-backend BACKEND     fswebcam、rpicam、picamera2、mockから選択する。
     --camera-device PATH         USBカメラのV4L2デバイスを指定する。
     --photo-dir PATH             写真保存先を指定する。
@@ -226,7 +226,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-now",
         action="store_true",
-        help="生成後にsystemdを再読み込みし、サービスを有効化・起動する",
+        help="生成後にsystemdを再読み込みし、サービスを有効化・再起動する",
     )
     parser.add_argument("--dry-run", action="store_true", help="内容を表示するだけで変更しない")
     return parser.parse_args()
@@ -379,18 +379,21 @@ def main() -> int:
                 check=True,
             )
             subprocess.run(
-                _privileged_command(
-                    "systemctl", "enable", "--now", args.unit_path.name
-                ),
+                _privileged_command("systemctl", "enable", args.unit_path.name),
+                check=True,
+            )
+            subprocess.run(
+                _privileged_command("systemctl", "restart", args.unit_path.name),
                 check=True,
             )
         except (OSError, subprocess.CalledProcessError) as exc:
             print(f"エラー: systemctlの実行に失敗しました: {exc}", file=sys.stderr)
             return 1
-        print("raspi-camera-web.serviceを有効化して起動しました。")
+        print("raspi-camera-web.serviceを有効化して再起動しました。")
     else:
         print("次に sudo systemctl daemon-reload を実行してください。")
-        print("起動する場合は sudo systemctl enable --now raspi-camera-web.service を実行します。")
+        print("起動する場合は sudo systemctl enable raspi-camera-web.service を実行します。")
+        print("続けて sudo systemctl restart raspi-camera-web.service を実行します。")
     return 0
 
 
