@@ -15,9 +15,14 @@ const dialogImage = document.querySelector("#dialog-image");
 const dialogTime = document.querySelector("#dialog-time");
 const closeDialogButton = document.querySelector("#close-dialog");
 const deletePhotoButton = document.querySelector("#delete-photo");
+const videoList = document.querySelector("#video-list");
+const emptyVideoMessage = document.querySelector("#empty-video-message");
+const motionToggle = document.querySelector("#motion-toggle");
 
 const photosPerPage = 8;
 let photos = [];
+let videos = [];
+let motionEnabled = null;
 let currentPage = 1;
 let selectedPhoto = null;
 let latestPhotoId = null;
@@ -118,6 +123,111 @@ async function loadPhotos() {
   }
 }
 
+function renderVideos() {
+  if (videoList === null || emptyVideoMessage === null) {
+    return;
+  }
+
+  videoList.replaceChildren();
+  emptyVideoMessage.hidden = videos.length > 0;
+
+  for (const video of videos) {
+    const card = document.createElement("article");
+    const details = document.createElement("div");
+    const time = document.createElement("p");
+    const format = document.createElement("p");
+    const downloadLink = document.createElement("a");
+
+    card.className = "video-card";
+    details.className = "video-details";
+    time.textContent = formatDate(video.captured_at);
+    format.textContent = "MP4";
+    downloadLink.className = "download-button";
+    downloadLink.href = video.url;
+    downloadLink.download = `${video.id}.mp4`;
+    downloadLink.textContent = "ダウンロード";
+    downloadLink.setAttribute("aria-label", `${formatDate(video.captured_at)}の動画をダウンロード`);
+    details.append(time, format);
+    card.append(details, downloadLink);
+    videoList.append(card);
+  }
+}
+
+async function loadVideos() {
+  if (videoList === null) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/videos", { headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      throw new Error("録画動画の一覧を取得できませんでした。");
+    }
+    videos = await response.json();
+    renderVideos();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function renderMotionToggle() {
+  if (motionToggle === null || motionEnabled === null) {
+    return;
+  }
+
+  motionToggle.disabled = false;
+  motionToggle.classList.toggle("enabled", motionEnabled);
+  motionToggle.setAttribute("aria-pressed", String(motionEnabled));
+  motionToggle.textContent = motionEnabled
+    ? "動体検知: ON（停止）"
+    : "動体検知: OFF（開始）";
+}
+
+async function loadMotionStatus() {
+  if (motionToggle === null) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/motion", { headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      throw new Error("動体検知の状態を取得できませんでした。");
+    }
+    const payload = await response.json();
+    motionEnabled = payload.enabled;
+    renderMotionToggle();
+  } catch (error) {
+    motionToggle.textContent = "動体検知の状態を取得できません";
+    setStatus(error.message, true);
+  }
+}
+
+async function toggleMotionDetection() {
+  if (motionToggle === null || motionEnabled === null) {
+    return;
+  }
+
+  const nextEnabled = !motionEnabled;
+  motionToggle.disabled = true;
+  try {
+    const response = await fetch("/api/motion", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ enabled: nextEnabled }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || "動体検知を切り替えられませんでした。");
+    }
+    motionEnabled = payload.enabled;
+    renderMotionToggle();
+    setStatus(motionEnabled ? "動体検知を開始しました。" : "動体検知を停止しました。");
+  } catch (error) {
+    renderMotionToggle();
+    setStatus(error.message, true);
+  }
+}
+
 async function capturePhoto() {
   captureButton.disabled = true;
   captureLabel.textContent = "撮影中…";
@@ -203,6 +313,9 @@ nextPageButton.addEventListener("click", () => {
 });
 closeDialogButton.addEventListener("click", () => photoDialog.close());
 deletePhotoButton.addEventListener("click", deleteSelectedPhoto);
+if (motionToggle !== null) {
+  motionToggle.addEventListener("click", toggleMotionDetection);
+}
 photoDialog.addEventListener("close", () => {
   selectedPhoto = null;
   dialogImage.removeAttribute("src");
@@ -210,6 +323,12 @@ photoDialog.addEventListener("close", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     loadPhotos();
+    loadVideos();
   }
 });
 loadPhotos();
+loadVideos();
+loadMotionStatus();
+if (videoList !== null) {
+  window.setInterval(loadVideos, 10_000);
+}

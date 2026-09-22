@@ -11,6 +11,9 @@
     --camera-device PATH         USBカメラのV4L2デバイスを指定する。
     --photo-dir PATH             写真保存先を指定する。
     --video-dir PATH             動画保存先を指定する。
+    --motion-max-record-seconds N  1本の動体検知録画の上限秒数を指定する。
+    --motion-settle-seconds N    照明変化後の検知待機秒数を指定する。
+    --[no-]motion-enabled        動体検知の既定の有効状態を指定する。
     --force                      既存のunitと環境ファイルを上書きする。
 
 全引数は `uv run python scripts/configure_systemd.py --help` で確認する。
@@ -46,6 +49,13 @@ def _positive_float(value: str) -> float:
     number = float(value)
     if number <= 0:
         raise argparse.ArgumentTypeError("0より大きい数値を指定してください")
+    return number
+
+
+def _ratio(value: str) -> float:
+    number = _positive_float(value)
+    if number > 1:
+        raise argparse.ArgumentTypeError("1以下の数値を指定してください")
     return number
 
 
@@ -88,9 +98,15 @@ def build_environment(args: argparse.Namespace, photo_dir: Path, video_dir: Path
         ("LIVE_STREAM_HEIGHT", args.live_stream_height),
         ("LIVE_STREAM_FPS", args.live_stream_fps),
         ("MOTION_THRESHOLD", args.motion_threshold),
+        ("MOTION_MIN_CHANGED_RATIO", args.motion_min_changed_ratio),
+        ("MOTION_ILLUMINATION_CHANGED_RATIO", args.motion_illumination_changed_ratio),
+        ("MOTION_ILLUMINATION_DIRECTION_RATIO", args.motion_illumination_direction_ratio),
+        ("MOTION_SETTLE_SECONDS", args.motion_settle_seconds),
         ("MOTION_MINIMUM_CONSECUTIVE_FRAMES", args.motion_minimum_consecutive_frames),
         ("MOTION_RECORD_SECONDS", args.motion_record_seconds),
+        ("MOTION_MAX_RECORD_SECONDS", args.motion_max_record_seconds),
         ("MOTION_COOLDOWN_SECONDS", args.motion_cooldown_seconds),
+        ("MOTION_ENABLED", args.motion_enabled),
     )
     if args.camera_backend == "picamera2":
         values += (("PYTHONPATH", "/usr/lib/python3/dist-packages"),)
@@ -178,9 +194,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--live-stream-height", type=_positive_int, default=360)
     parser.add_argument("--live-stream-fps", type=_positive_int, default=5)
     parser.add_argument("--motion-threshold", type=_positive_float, default=12.0)
+    parser.add_argument("--motion-min-changed-ratio", type=_ratio, default=0.003)
+    parser.add_argument("--motion-illumination-changed-ratio", type=_ratio, default=0.65)
+    parser.add_argument("--motion-illumination-direction-ratio", type=_ratio, default=0.90)
+    parser.add_argument("--motion-settle-seconds", type=_positive_int, default=5)
     parser.add_argument("--motion-minimum-consecutive-frames", type=_positive_int, default=3)
     parser.add_argument("--motion-record-seconds", type=_positive_int, default=20)
+    parser.add_argument("--motion-max-record-seconds", type=_positive_int, default=60)
     parser.add_argument("--motion-cooldown-seconds", type=_positive_int, default=30)
+    parser.add_argument(
+        "--motion-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="動体検知の既定状態（既定: 有効）",
+    )
     parser.add_argument("--unit-path", type=Path, default=DEFAULT_UNIT_PATH)
     parser.add_argument("--env-path", type=Path, default=DEFAULT_ENV_PATH)
     parser.add_argument(
@@ -201,6 +228,12 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.motion_max_record_seconds < args.motion_record_seconds:
+        print(
+            "エラー: --motion-max-record-secondsは--motion-record-seconds以上にしてください。",
+            file=sys.stderr,
+        )
+        return 2
     try:
         account = pwd.getpwnam(args.user)
     except KeyError:

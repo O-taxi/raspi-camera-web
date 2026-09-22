@@ -39,3 +39,18 @@ def test_camera_backend_rejects_unknown_value(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="CAMERA_BACKEND"):
         Settings.from_environment()
+
+
+def test_motion_configuration_reads_boolean_and_validates_recording_limit(monkeypatch) -> None:
+    monkeypatch.setenv("MOTION_ENABLED", "false")
+    monkeypatch.setenv("MOTION_RECORD_SECONDS", "30")
+    monkeypatch.setenv("MOTION_MAX_RECORD_SECONDS", "60")
+
+    settings = Settings.from_environment()
+
+    assert not settings.motion_enabled
+    assert settings.motion_max_record_seconds == 60
+
+    monkeypatch.setenv("MOTION_MAX_RECORD_SECONDS", "20")
+    with pytest.raises(ValueError, match="MOTION_MAX_RECORD_SECONDS"):
+        Settings.from_environment()

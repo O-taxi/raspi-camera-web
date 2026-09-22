@@ -12,6 +12,8 @@ from app.services.camera import (
     CameraTimeoutError,
 )
 from app.services.photos import PhotoStore
+from app.services.picamera2 import MOTION_SAMPLE_STRIDE, Picamera2Service, _Recording
+from app.services.videos import VideoStore
 
 
 @pytest.mark.asyncio
@@ -154,3 +156,115 @@ async def test_rpicam_capture_uses_csi_camera_command(settings) -> None:
         "--output",
         str(output_path),
     )
+
+
+def test_finishing_recording_keeps_camera_running(settings, tmp_path: Path) -> None:
+    video_store = VideoStore(tmp_path / "videos", 3)
+    service = Picamera2Service(settings, video_store)
+    video_id = "20260923-120000-12345678"
+    temporary_path = video_store.path_for_recording(video_id)
+    temporary_path.write_bytes(b"video")
+    encoder = object()
+
+    class Camera:
+        def __init__(self) -> None:
+            self.stop_encoder_calls: list[object] = []
+            self.stop_called = False
+
+        def stop_encoder(self, recording_encoder: object) -> None:
+            self.stop_encoder_calls.append(recording_encoder)
+
+        def stop(self) -> None:
+            self.stop_called = True
+
+    camera = Camera()
+    service._camera = camera
+    service._recording = _Recording(
+        video_id,
+        temporary_path,
+        deadline=0.0,
+        maximum_deadline=0.0,
+    )
+    service._recording_encoder = encoder
+
+    service._finish_recording()
+
+    assert camera.stop_encoder_calls == [encoder]
+    assert not camera.stop_called
+    assert video_store.path_for_new_video(video_id).is_file()
+
+
+@pytest.mark.asyncio
+async def test_motion_detection_setting_is_persisted(settings, tmp_path: Path) -> None:
+    motion_settings = replace(settings, motion_state_path=tmp_path / ".motion-state.json")
+    video_store = VideoStore(tmp_path / "videos", 3)
+    service = Picamera2Service(motion_settings, video_store)
+
+    enabled = await service.set_motion_enabled(False)
+
+    assert not enabled
+    assert motion_settings.motion_state_path.read_text(encoding="utf-8") == '{"enabled": false}\n'
+    restored_service = Picamera2Service(
+        motion_settings,
+        video_store,
+    )
+    assert not restored_service._load_motion_enabled()
+
+
+@pytest.mark.asyncio
+async def test_recording_stops_at_its_absolute_time_limit(settings, tmp_path: Path) -> None:
+    video_store = VideoStore(tmp_path / "videos", 3)
+    service = Picamera2Service(settings, video_store)
+    service._recording = _Recording(
+        "20260923-120000-12345678",
+        video_store.path_for_recording("20260923-120000-12345678"),
+        deadline=20.0,
+        maximum_deadline=10.0,
+    )
+
+    with patch("app.services.picamera2.time.monotonic", return_value=10.0), patch.object(
+        service, "_finish_recording"
+    ) as finish_recording:
+        await service._update_recording(motion_detected=True)
+
+    finish_recording.assert_called_once_with()
+
+
+def test_global_brightness_change_is_not_motion(settings, tmp_path: Path) -> None:
+    motion_settings = replace(
+        settings,
+        motion_threshold=10.0,
+        motion_settle_seconds=5,
+    )
+    service = Picamera2Service(motion_settings, VideoStore(tmp_path / "videos", 3))
+    service._previous_luma = bytes([10]) * 1_000
+
+    with patch("app.services.picamera2.time.monotonic", return_value=100.0):
+        detected = service._detect_motion(bytes([100]) * 1_000)
+
+    assert not detected
+    assert service._motion_settling_until == 105.0
+    assert service._motion_frames == 0
+
+
+def test_local_motion_uses_changed_pixel_ratio(settings, tmp_path: Path) -> None:
+    motion_settings = replace(
+        settings,
+        motion_threshold=10.0,
+        motion_min_changed_ratio=0.01,
+        motion_minimum_consecutive_frames=2,
+    )
+    service = Picamera2Service(motion_settings, VideoStore(tmp_path / "videos", 3))
+    first_frame = bytes(1_000)
+    second_frame = bytearray(first_frame)
+    third_frame = bytearray(first_frame)
+    for index in range(0, 40, MOTION_SAMPLE_STRIDE):
+        second_frame[index] = 20
+
+    service._previous_luma = first_frame
+    with patch("app.services.picamera2.time.monotonic", return_value=100.0):
+        first_detection = service._detect_motion(bytes(second_frame))
+        second_detection = service._detect_motion(bytes(third_frame))
+
+    assert not first_detection
+    assert second_detection

@@ -15,9 +15,14 @@
 
       {% if live_stream_available %}
       <section class="live-view" aria-labelledby="live-view-title">
-        <div class="section-heading">
+        <div class="section-heading live-heading">
           <h2 id="live-view-title">ライブ映像</h2>
-          <span class="live-indicator">LIVE</span>
+          <div class="live-controls">
+            <span class="live-indicator">LIVE</span>
+            <button id="motion-toggle" class="secondary-button motion-toggle" type="button" disabled>
+              動体検知を読み込み中…
+            </button>
+          </div>
         </div>
         <img src="/stream.mjpg" alt="カメラのライブ映像">
       </section>
@@ -50,6 +55,16 @@
           <button id="next-page" class="secondary-button" type="button">次へ</button>
         </nav>
       </section>
+
+      {% if live_stream_available %}
+      <section class="video-history" aria-labelledby="video-history-title">
+        <div class="section-heading">
+          <h2 id="video-history-title">録画動画</h2>
+        </div>
+        <div id="video-list" class="video-list"></div>
+        <p id="empty-video-message" class="empty-message">保存された動画はありません。</p>
+      </section>
+      {% endif %}
     </main>
 
     <div id="status" class="toast" role="status" aria-live="polite" hidden></div>

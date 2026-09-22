@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import threading
 import time
@@ -25,6 +26,7 @@ class _Recording:
     video_id: str
     temporary_path: Path
     deadline: float
+    maximum_deadline: float
 
 
 class Picamera2Service:
@@ -45,11 +47,14 @@ class Picamera2Service:
         self._recording_encoder: Any | None = None
         self._recording_output: Any | None = None
         self._last_recording_finished_at = 0.0
+        self._motion_settling_until = 0.0
+        self._motion_enabled = settings.motion_enabled
         self._started = False
 
     async def start(self) -> None:
         if self._started:
             return
+        self._motion_enabled = await asyncio.to_thread(self._load_motion_enabled)
         await asyncio.to_thread(self._open_camera)
         self._started = True
         self._producer_task = asyncio.create_task(self._produce_frames())
@@ -72,6 +77,20 @@ class Picamera2Service:
         if not self._started:
             raise RuntimeError("Picamera2 camera service is not running")
         await asyncio.to_thread(self._capture_still, output_path)
+
+    @property
+    def motion_enabled(self) -> bool:
+        return self._motion_enabled
+
+    async def set_motion_enabled(self, enabled: bool) -> bool:
+        await asyncio.to_thread(self._save_motion_enabled, enabled)
+        self._motion_enabled = enabled
+        self._previous_luma = None
+        self._motion_frames = 0
+        self._motion_settling_until = 0.0
+        if not enabled and self._recording is not None:
+            await asyncio.to_thread(self._finish_recording)
+        return self._motion_enabled
 
     async def mjpeg_frames(self) -> AsyncIterator[bytes]:
         version = -1
@@ -112,7 +131,7 @@ class Picamera2Service:
                     self.settings.live_stream_width,
                     self.settings.live_stream_height,
                 ),
-                "format": "YUV420",
+                "format": "RGB888",
             },
             controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
         )
@@ -142,8 +161,12 @@ class Picamera2Service:
             started_at = time.monotonic()
             try:
                 luma, jpeg = await asyncio.to_thread(self._capture_live_frame)
-                motion_detected = self._detect_motion(luma)
-                await self._update_recording(motion_detected)
+                if self._motion_enabled:
+                    motion_detected = self._detect_motion(luma)
+                    await self._update_recording(motion_detected)
+                else:
+                    self._previous_luma = None
+                    self._motion_frames = 0
                 async with self._frame_condition:
                     self._latest_jpeg = jpeg
                     self._frame_version += 1
@@ -161,25 +184,24 @@ class Picamera2Service:
         camera = self._require_camera()
         with self._camera_lock:
             frame = camera.capture_array("lores")
-        luma = frame[
-            : self.settings.live_stream_height, : self.settings.live_stream_width
-        ].tobytes()
-        return luma, self._encode_luma_jpeg(luma)
+        return self._encode_live_frame(frame)
 
-    def _encode_luma_jpeg(self, luma: bytes) -> bytes:
+    def _encode_live_frame(self, frame: Any) -> tuple[bytes, bytes]:
         try:
             from PIL import Image
         except ImportError as exc:
             raise RuntimeError("Pillow is required by the Picamera2 live stream") from exc
 
-        image = Image.frombytes(
-            "L",
-            (self.settings.live_stream_width, self.settings.live_stream_height),
-            luma,
-        )
+        rgb_frame = frame[
+            : self.settings.live_stream_height,
+            : self.settings.live_stream_width,
+            :3,
+        ]
+        image = Image.fromarray(rgb_frame, "RGB")
+        luma = image.convert("L").tobytes()
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=75, optimize=False)
-        return buffer.getvalue()
+        return luma, buffer.getvalue()
 
     def _detect_motion(self, current_luma: bytes) -> bool:
         previous_luma = self._previous_luma
@@ -187,11 +209,41 @@ class Picamera2Service:
         if previous_luma is None:
             return False
 
-        score = sum(
-            abs(current_luma[index] - previous_luma[index])
-            for index in range(0, len(current_luma), MOTION_SAMPLE_STRIDE)
-        ) / ((len(current_luma) + MOTION_SAMPLE_STRIDE - 1) // MOTION_SAMPLE_STRIDE)
-        if score >= self.settings.motion_threshold:
+        changed_pixels = 0
+        brightened_pixels = 0
+        darkened_pixels = 0
+        sample_count = 0
+        for index in range(0, len(current_luma), MOTION_SAMPLE_STRIDE):
+            difference = current_luma[index] - previous_luma[index]
+            sample_count += 1
+            if abs(difference) < self.settings.motion_threshold:
+                continue
+            changed_pixels += 1
+            if difference > 0:
+                brightened_pixels += 1
+            else:
+                darkened_pixels += 1
+
+        if changed_pixels == 0:
+            self._motion_frames = 0
+            return False
+
+        changed_ratio = changed_pixels / sample_count
+        directional_ratio = max(brightened_pixels, darkened_pixels) / changed_pixels
+        now = time.monotonic()
+        if (
+            changed_ratio >= self.settings.motion_illumination_changed_ratio
+            and directional_ratio >= self.settings.motion_illumination_direction_ratio
+        ):
+            self._motion_frames = 0
+            self._motion_settling_until = now + self.settings.motion_settle_seconds
+            return False
+
+        if now < self._motion_settling_until:
+            self._motion_frames = 0
+            return False
+
+        if changed_ratio >= self.settings.motion_min_changed_ratio:
             self._motion_frames += 1
         else:
             self._motion_frames = 0
@@ -201,8 +253,13 @@ class Picamera2Service:
         now = time.monotonic()
         recording = self._recording
         if recording is not None:
-            if motion_detected:
-                recording.deadline = now + self.settings.motion_record_seconds
+            if now >= recording.maximum_deadline:
+                await asyncio.to_thread(self._finish_recording)
+            elif motion_detected:
+                recording.deadline = min(
+                    now + self.settings.motion_record_seconds,
+                    recording.maximum_deadline,
+                )
             elif now >= recording.deadline:
                 await asyncio.to_thread(self._finish_recording)
             return
@@ -226,13 +283,14 @@ class Picamera2Service:
         encoder = H264Encoder(bitrate=self.settings.video_bitrate)
         output = FfmpegOutput(str(temporary_path))
         with self._camera_lock:
-            camera.start_recording(encoder, output, name="main")
+            camera.start_encoder(encoder, output, name="main")
             self._recording_encoder = encoder
             self._recording_output = output
             self._recording = _Recording(
                 video_id=video_id,
                 temporary_path=temporary_path,
                 deadline=now + self.settings.motion_record_seconds,
+                maximum_deadline=now + self.settings.motion_max_record_seconds,
             )
 
     def _finish_recording(self) -> None:
@@ -242,7 +300,8 @@ class Picamera2Service:
             return
         try:
             with self._camera_lock:
-                camera.stop_recording()
+                if self._recording_encoder is not None:
+                    camera.stop_encoder(self._recording_encoder)
             final_path = self.video_store.path_for_new_video(recording.video_id)
             if recording.temporary_path.is_file() and recording.temporary_path.stat().st_size > 0:
                 recording.temporary_path.replace(final_path)
@@ -254,6 +313,34 @@ class Picamera2Service:
             self._recording_encoder = None
             self._recording_output = None
             self._last_recording_finished_at = time.monotonic()
+
+    def _load_motion_enabled(self) -> bool:
+        try:
+            state = json.loads(self.settings.motion_state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return self.settings.motion_enabled
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("Unable to read motion detection state: %s", exc)
+            return self.settings.motion_enabled
+
+        enabled = state.get("enabled") if isinstance(state, dict) else None
+        if isinstance(enabled, bool):
+            return enabled
+        LOGGER.warning("Motion detection state is invalid; using configured default")
+        return self.settings.motion_enabled
+
+    def _save_motion_enabled(self, enabled: bool) -> None:
+        path = self.settings.motion_state_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps({"enabled": enabled}) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def _require_camera(self) -> Any:
         if self._camera is None:

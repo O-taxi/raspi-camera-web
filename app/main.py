@@ -41,6 +41,14 @@ class VideoResponse(BaseModel):
     url: str
 
 
+class MotionStatusResponse(BaseModel):
+    enabled: bool
+
+
+class MotionSettingsRequest(BaseModel):
+    enabled: bool
+
+
 def create_app(
     settings: Settings | None = None,
     camera_service: CameraService | None = None,
@@ -156,6 +164,30 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
+    @application.get("/api/motion", response_model=MotionStatusResponse)
+    async def motion_status() -> MotionStatusResponse:
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Motion detection is not available")
+        return MotionStatusResponse(enabled=video_service.motion_enabled)
+
+    @application.put(
+        "/api/motion",
+        response_model=MotionStatusResponse,
+        responses={403: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def update_motion(
+        request: Request, settings: MotionSettingsRequest
+    ) -> MotionStatusResponse:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site motion updates are not allowed")
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Motion detection is not available")
+        try:
+            enabled = await video_service.set_motion_enabled(settings.enabled)
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Motion detection update failed") from exc
+        return MotionStatusResponse(enabled=enabled)
+
     @application.get("/api/videos", response_model=list[VideoResponse])
     async def videos() -> list[VideoResponse]:
         if video_store is None:
@@ -167,7 +199,12 @@ def create_app(
         path = video_store.resolve(video_id) if video_store is not None else None
         if path is None:
             raise HTTPException(status_code=404, detail="Video not found")
-        return FileResponse(path, media_type="video/mp4", stat_result=path.stat())
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            filename=f"{video_id}.mp4",
+            stat_result=path.stat(),
+        )
 
     return application
 

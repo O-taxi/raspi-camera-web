@@ -98,6 +98,23 @@ h2 {
   letter-spacing: 0.08em;
 }
 
+.live-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.motion-toggle {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.motion-toggle.enabled {
+  border-color: #2b6978;
+  background: #12313b;
+  color: #dff9ff;
+}
+
 .section-heading h2 {
   margin-bottom: 0.25rem;
 }
@@ -250,6 +267,49 @@ h2 {
   display: none;
 }
 
+.video-history {
+  margin-top: 3rem;
+}
+
+.video-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.video-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid #263247;
+  border-radius: 0.9rem;
+  background: #131b2a;
+}
+
+.video-details p {
+  margin: 0;
+}
+
+.video-details p + p {
+  margin-top: 0.2rem;
+  color: #a9b4c5;
+  font-size: 0.8rem;
+}
+
+.download-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.75rem;
+  background: #48cae4;
+  color: #071119;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .photo-dialog {
   width: min(72rem, calc(100% - 2rem));
   max-width: none;
@@ -316,6 +376,24 @@ h2 {
   }
 
   .capture-button {
+    width: 100%;
+  }
+
+  .live-heading {
+    align-items: flex-start;
+  }
+
+  .live-controls {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .video-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .download-button {
     width: 100%;
   }
 }

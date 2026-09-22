@@ -39,6 +39,24 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    if raw_value.lower() in ("1", "true", "yes", "on"):
+        return True
+    if raw_value.lower() in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
+def _ratio(name: str, default: float) -> float:
+    value = _positive_float(name, default)
+    if value > 1:
+        raise ValueError(f"{name} must be at most one")
+    return value
+
+
 def _camera_backend() -> CameraBackend:
     value = os.getenv("CAMERA_BACKEND", "fswebcam")
     if value in ("fswebcam", "rpicam", "picamera2", "mock"):
@@ -78,13 +96,25 @@ class Settings:
     live_stream_height: int = 360
     live_stream_fps: int = 5
     motion_threshold: float = 12.0
+    motion_min_changed_ratio: float = 0.003
+    motion_illumination_changed_ratio: float = 0.65
+    motion_illumination_direction_ratio: float = 0.90
+    motion_settle_seconds: int = 5
     motion_minimum_consecutive_frames: int = 3
     motion_record_seconds: int = 20
+    motion_max_record_seconds: int = 60
     motion_cooldown_seconds: int = 30
+    motion_enabled: bool = True
+    motion_state_path: Path = PROJECT_ROOT / "data" / "videos" / ".motion-state.json"
 
     @classmethod
     def from_environment(cls) -> Settings:
         camera_backend = _camera_backend()
+        video_dir = Path(os.getenv("VIDEO_DIR", PROJECT_ROOT / "data" / "videos"))
+        motion_record_seconds = _positive_int("MOTION_RECORD_SECONDS", 20)
+        motion_max_record_seconds = _positive_int("MOTION_MAX_RECORD_SECONDS", 60)
+        if motion_max_record_seconds < motion_record_seconds:
+            raise ValueError("MOTION_MAX_RECORD_SECONDS must be at least MOTION_RECORD_SECONDS")
         return cls(
             photo_dir=Path(os.getenv("PHOTO_DIR", PROJECT_ROOT / "data" / "photos")),
             camera_backend=camera_backend,
@@ -98,7 +128,7 @@ class Settings:
             ),
             maximum_photos=_positive_int("MAXIMUM_PHOTOS", 100),
             camera_capture_delay_ms=_positive_int("CAMERA_CAPTURE_DELAY_MS", 1000),
-            video_dir=Path(os.getenv("VIDEO_DIR", PROJECT_ROOT / "data" / "videos")),
+            video_dir=video_dir,
             maximum_videos=_positive_int("MAXIMUM_VIDEOS", 20),
             video_width=_positive_int("VIDEO_WIDTH", 1280),
             video_height=_positive_int("VIDEO_HEIGHT", 720),
@@ -108,9 +138,22 @@ class Settings:
             live_stream_height=_positive_int("LIVE_STREAM_HEIGHT", 360),
             live_stream_fps=_positive_int("LIVE_STREAM_FPS", 5),
             motion_threshold=_positive_float("MOTION_THRESHOLD", 12.0),
+            motion_min_changed_ratio=_ratio("MOTION_MIN_CHANGED_RATIO", 0.003),
+            motion_illumination_changed_ratio=_ratio(
+                "MOTION_ILLUMINATION_CHANGED_RATIO", 0.65
+            ),
+            motion_illumination_direction_ratio=_ratio(
+                "MOTION_ILLUMINATION_DIRECTION_RATIO", 0.90
+            ),
+            motion_settle_seconds=_positive_int("MOTION_SETTLE_SECONDS", 5),
             motion_minimum_consecutive_frames=_positive_int(
                 "MOTION_MINIMUM_CONSECUTIVE_FRAMES", 3
             ),
-            motion_record_seconds=_positive_int("MOTION_RECORD_SECONDS", 20),
+            motion_record_seconds=motion_record_seconds,
+            motion_max_record_seconds=motion_max_record_seconds,
             motion_cooldown_seconds=_positive_int("MOTION_COOLDOWN_SECONDS", 30),
+            motion_enabled=_boolean("MOTION_ENABLED", True),
+            motion_state_path=Path(
+                os.getenv("MOTION_STATE_PATH", video_dir / ".motion-state.json")
+            ),
         )

@@ -1,6 +1,6 @@
 [project]
 name = "raspi-camera-web"
-version = "0.2.0"
+version = "0.3.0"
 description = "Private camera capture, live stream, and motion recording UI for Raspberry Pi"
 requires-python = ">=3.9"
 dependencies = [
