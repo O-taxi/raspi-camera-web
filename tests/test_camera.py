@@ -213,7 +213,7 @@ async def test_motion_detection_setting_is_persisted(settings, tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_disabling_motion_discards_a_short_recording(settings, tmp_path: Path) -> None:
+async def test_disabling_motion_discards_an_active_recording(settings, tmp_path: Path) -> None:
     motion_settings = replace(
         settings,
         motion_state_path=tmp_path / ".motion-state.json",
@@ -233,7 +233,7 @@ async def test_disabling_motion_discards_a_short_recording(settings, tmp_path: P
     service._recording = _Recording(
         video_id,
         temporary_path,
-        started_at=100.0,
+        started_at=90.0,
         deadline=120.0,
         maximum_deadline=160.0,
     )

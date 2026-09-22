@@ -89,13 +89,8 @@ class Picamera2Service:
         self._previous_luma = None
         self._motion_frames = 0
         self._motion_settling_until = 0.0
-        recording = self._recording
-        if not enabled and recording is not None:
-            discard = (
-                time.monotonic() - recording.started_at
-                < self.settings.motion_min_record_seconds
-            )
-            await asyncio.to_thread(self._finish_recording, discard)
+        if not enabled and self._recording is not None:
+            await asyncio.to_thread(self._finish_recording, True)
         return self._motion_enabled
 
     async def mjpeg_frames(self) -> AsyncIterator[bytes]:
