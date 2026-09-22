@@ -10,13 +10,14 @@ Raspberry Piに接続したカメラを、Tailscale内のブラウザーから�
 - 履歴写真の拡大表示と削除
 - 保存枚数による自動整理
 - 実カメラなしで試せるモック撮影
+- Raspberry Piカメラモジュールでは、ライブ映像と動体検知による動画保存を利用可能
 
 一般インターネットには公開せず、Tailscaleに参加している端末からだけ利用する構成を前提とします。
 
 ## 技術スタック
 
 - Raspberry Pi 3B / Raspberry Pi OS（Python 3.9以上）
-- USBカメラ / fswebcam
+- USBカメラ（`fswebcam`）または Raspberry Pi カメラモジュール（`rpicam-still` / `Picamera2`）
 - Python 3 / FastAPI / Uvicorn
 - Jinja2 / HTML / CSS / Vanilla JavaScript
 - systemd
@@ -30,16 +31,16 @@ sequenceDiagram
     participant Tailscale as Tailscale Serve
     participant API as FastAPI<br/>127.0.0.1:8000
     participant Camera as CameraService
-    participant Command as fswebcam
-    participant USB as USBカメラ
+    participant Command as fswebcam / rpicam-still
+    participant Hardware as USBカメラ / CSIカメラ
     participant Store as data/photos
 
     User->>Tailscale: HTTPS POST /api/capture
     Tailscale->>API: HTTP POST /api/capture
     API->>Camera: 撮影要求
     Camera->>Command: 出力先を指定して実行
-    Command->>USB: フレーム取得
-    USB-->>Command: カメラ画像
+    Command->>Hardware: フレーム取得
+    Hardware-->>Command: カメラ画像
     Command->>Store: JPEGを保存
     Command-->>Camera: 終了結果
     Camera->>Store: 出力確認・保存上限の整理
@@ -70,15 +71,21 @@ sequenceDiagram
 
 同一端末から`127.0.0.1:8000`へ直接接続する場合は、Tailscale Serveを経由しません。
 
-## USBカメラで起動
+## カメラを接続して起動
 
-先に [Raspberry PiとUSBカメラのセットアップ](docs/raspberry-pi-setup.md) に従って、`uv`、`fswebcam`、`v4l-utils`を準備します。その後、依存関係を同期します。
+次のいずれか一方だけを選びます。USBカメラとCSIカメラでは、診断・起動設定が異なります。
+
+### 共通の準備
+
+Raspberry Pi OS上で、リポジトリをcloneした通常のログインユーザーで実行します。スクリプトがカメラ用APTパッケージ、uv、ロック済みPython依存を導入します。
 
 ```bash
-uv sync --python /usr/bin/python3 --no-python-downloads --no-dev --locked
+./scripts/install_raspberry_pi_dependencies.sh
 ```
 
-USBカメラを接続し、撮影可能なV4L2デバイスとして認識されていることを確認します。
+### USBカメラを使う場合（`fswebcam`）
+
+USBカメラを接続し、撮影可能なV4L2デバイスとして認識されていることを確認します。ここで使うデバイスは既定で`/dev/video0`です。
 
 ```bash
 uv run --no-sync python scripts/check_usb_camera.py --device /dev/video0
@@ -95,15 +102,45 @@ fswebcam \
 file /tmp/raspi-camera-test.jpg
 ```
 
-JPEGとして保存できたら、実カメラバックエンドでアプリを起動します。
+JPEGとして保存できたら、USBバックエンドで起動します。
 
 ```bash
-CAMERA_BACKEND=fswebcam \
-CAMERA_DEVICE=/dev/video0 \
+# USBカメラ
+CAMERA_BACKEND=fswebcam CAMERA_DEVICE=/dev/video0 \
 uv run --no-sync uvicorn app.main:app \
   --host 127.0.0.1 \
   --port 8000
 ```
+
+### CSIカメラを使う場合（リボンケーブル接続）
+
+`/dev/video0`や`CAMERA_DEVICE`は使用しません。最初にCSIカメラの認識とテスト撮影を確認します。
+
+```bash
+uv run --no-sync python scripts/check_csi_camera.py --capture
+```
+
+静止画のみなら、`rpicam-still`を使うバックエンドで起動します。
+
+```bash
+CAMERA_BACKEND=rpicam \
+CAMERA_COMMAND=rpicam-still \
+uv run --no-sync uvicorn app.main:app \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+ライブ映像または動体検知録画も使う場合は、単発撮影用の`rpicam`ではなくPicamera2を選びます。
+
+```bash
+PYTHONPATH=/usr/lib/python3/dist-packages \
+CAMERA_BACKEND=picamera2 \
+uv run --no-sync uvicorn app.main:app \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+Picamera2の詳細設定は[動画・動体検知の運用](docs/video-and-motion.md)を参照してください。
 
 同じ端末では`http://127.0.0.1:8000`を開きます。Tailscale内の別端末から接続する場合は、先にTailscale Serveを設定してHTTPSのURLを開きます。
 
@@ -118,9 +155,12 @@ POST   /api/capture             写真を撮影する
 GET    /api/photos              保存済み写真の一覧を取得する
 GET    /photos/{photo_id}       写真を取得する
 DELETE /api/photos/{photo_id}  写真を削除する
+GET    /stream.mjpg             Picamera2のライブ映像を取得する
+GET    /api/videos              動体検知で保存した動画の一覧を取得する
+GET    /videos/{video_id}       保存した動画を取得する
 ```
 
-USBカメラは既定で `/dev/video0` と `fswebcam` を使用します。
+USBカメラの詳細、旧 Raspberry Pi OSの`libcamera-still`、systemd設定は[Raspberry Piとカメラのセットアップ](docs/raspberry-pi-setup.md)を参照してください。
 
 ## セキュリティ方針
 

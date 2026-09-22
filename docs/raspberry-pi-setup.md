@@ -1,11 +1,11 @@
-# Raspberry PiとUSBカメラのセットアップ
+# Raspberry Piとカメラのセットアップ
 
 ## 対象環境
 
 - Raspberry Pi 3B
 - Raspberry Pi OS Lite 32-bit
 - Python 3.9以上
-- Video4Linux2対応USBカメラ
+- Video4Linux2対応USBカメラ、またはリボンケーブル接続のRaspberry Piカメラモジュール
 - 実行ユーザー `<your-user>`
 
 Raspbian GNU/Linux 9 (Stretch) は対象外です。新しいmicroSDへ現行のRaspberry Pi OS Liteをクリーンインストールし、元のSDカードは移行が完了するまで保管してください。メジャーバージョンをまたぐインプレース更新は行いません。
@@ -60,6 +60,66 @@ ls -l /dev/video0
 sudo usermod -aG video <your-user>
 ```
 
+## CSI接続の Raspberry Pi カメラモジュール
+
+Raspberry Piカメラモジュールは、カメラ用リボンケーブルを基板のCSIコネクターへ接続して使用します。電源を切った状態で接続し、ケーブルの向きは使用するPiとカメラモジュールの公式資料で確認してください。
+
+現行のRaspberry Pi OSでは`rpicam-still`を使用します。OSを更新後、コマンドがない場合はカメラアプリを導入します。
+
+```bash
+sudo apt update
+sudo apt install rpicam-apps
+rpicam-still --list-cameras
+rpicam-still --nopreview --width 1280 --height 720 --timeout 1000 --output test.jpg
+file test.jpg
+```
+
+アプリ用の簡易診断では、カメラ認識だけ、または実際のJPEG撮影までを確認できます。テスト画像は一時ディレクトリに保存後、自動削除されます。
+
+```bash
+uv run --no-sync python scripts/check_csi_camera.py
+uv run --no-sync python scripts/check_csi_camera.py --capture
+```
+
+`test.jpg`を確認後、削除して構いません。アプリは次の設定で起動します。CSIカメラでは`CAMERA_DEVICE`を使用しません。
+
+```bash
+CAMERA_BACKEND=rpicam \
+CAMERA_COMMAND=rpicam-still \
+CAMERA_WIDTH=1280 \
+CAMERA_HEIGHT=720 \
+CAMERA_CAPTURE_DELAY_MS=1000 \
+uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+古いRaspberry Pi OSで`rpicam-still`ではなく`libcamera-still`が提供される場合は、同じバックエンドのままコマンドだけ切り替えます。
+
+```bash
+CAMERA_BACKEND=rpicam CAMERA_COMMAND=libcamera-still \
+uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+カメラが一覧に出ない場合は、リボンケーブルの接続、カメラモジュールとの互換性、Raspberry Pi OSを確認します。`/dev/video0`の有無や`video`グループはCSIカメラの判定には使いません。
+
+ライブ映像や動体検知録画を使う場合は、[動画・動体検知の運用](video-and-motion.md)に従ってPicamera2を準備します。
+
+## Raspberry Pi上で写真を見る
+
+ヘッドレスのPiでは、Tailscale Serve経由でこのアプリをブラウザーから開く方法を推奨します。撮影履歴から画像を選択でき、PiにGUIや画像ビューアーを追加する必要はありません。
+
+Piにデスクトップ画面が接続されている場合は、軽量な`feh`を必要なときだけ導入して表示できます。`x11-utils`には画像ビューアーは含まれず、`xdg-open`もデスクトップ上の関連付け済みビューアーを起動するだけです。
+
+```bash
+sudo apt install feh
+feh data/photos/<photo-id>.jpg
+```
+
+SSHだけで接続している場合は、閲覧端末へコピーしてローカルのビューアーで開きます。
+
+```bash
+scp <your-user>@<raspi-host>:/home/<your-user>/raspi-camera-web/data/photos/<photo-id>.jpg .
+```
+
 ## アプリを配置
 
 Raspberry Piで使用するログインユーザー（以降 `<your-user>`）で、リポジトリをホームディレクトリへ配置します。以下の `<your-user>` は実際のユーザー名に置き換えてください。
@@ -68,10 +128,10 @@ Raspberry Piで使用するログインユーザー（以降 `<your-user>`）で
 cd /home/<your-user>
 git clone <repository-url> raspi-camera-web
 cd raspi-camera-web
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source "$HOME/.local/bin/env"
-uv sync --python /usr/bin/python3 --no-python-downloads --no-dev --locked
+./scripts/install_raspberry_pi_dependencies.sh
 ```
+
+このスクリプトは、USB／CSIカメラ用APTパッケージ、uv、ロック済みPython依存関係を導入します。Tailscaleの導入とtailnet認証は含めず、[Tailscale Serve設定](tailscale-setup.md)で個別に行います。
 
 手動起動で確認します。
 
@@ -118,6 +178,16 @@ uv run python scripts/configure_systemd.py \
   --camera-width 640 \
   --camera-height 480 \
   --maximum-photos 50 \
+  --enable-now
+```
+
+CSIカメラ用の環境ファイルを生成する場合は、バックエンドとコマンドを指定します。
+
+```bash
+uv run python scripts/configure_systemd.py \
+  --camera-backend rpicam \
+  --camera-command rpicam-still \
+  --camera-capture-delay-ms 1000 \
   --enable-now
 ```
 

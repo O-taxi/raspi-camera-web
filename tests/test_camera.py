@@ -109,3 +109,48 @@ async def test_mock_capture_creates_valid_jpeg_without_external_command(settings
     assert image.endswith(b"\xff\xd9")
     assert b"JFIF\x00" in image
     subprocess.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rpicam_capture_uses_csi_camera_command(settings) -> None:
+    rpicam_settings = replace(
+        settings,
+        camera_backend="rpicam",
+        camera_command="rpicam-still",
+        camera_capture_delay_ms=1200,
+    )
+    process = AsyncMock()
+    process.returncode = 0
+    finish = asyncio.Event()
+
+    async def communicate() -> tuple[bytes, bytes]:
+        await finish.wait()
+        return b"", b""
+
+    process.communicate.side_effect = communicate
+
+    with patch("asyncio.create_subprocess_exec", return_value=process) as subprocess:
+        service = CameraService(
+            rpicam_settings,
+            PhotoStore(rpicam_settings.photo_dir, rpicam_settings.maximum_photos),
+        )
+        capture = asyncio.create_task(service.capture())
+        await asyncio.sleep(0)
+        command = subprocess.await_args.args
+        output_path = Path(command[-1])
+        output_path.write_bytes(b"jpeg")
+        finish.set()
+        await capture
+
+    assert command == (
+        "rpicam-still",
+        "--nopreview",
+        "--width",
+        "640",
+        "--height",
+        "480",
+        "--timeout",
+        "1200",
+        "--output",
+        str(output_path),
+    )

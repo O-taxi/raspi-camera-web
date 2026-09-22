@@ -16,7 +16,7 @@ RestartSec=5
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=<photo-dir>
+ReadWritePaths=<photo-dir> <video-dir>
 NoNewPrivileges=true
 
 [Install]

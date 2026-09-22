@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -17,6 +19,8 @@ from app.services.camera import (
     CameraTimeoutError,
 )
 from app.services.photos import PhotoStore
+from app.services.picamera2 import MJPEG_BOUNDARY, Picamera2Service
+from app.services.videos import VideoStore
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -31,23 +35,55 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+class VideoResponse(BaseModel):
+    id: str
+    captured_at: str
+    url: str
+
+
 def create_app(
     settings: Settings | None = None,
     camera_service: CameraService | None = None,
 ) -> FastAPI:
     active_settings = settings or Settings.from_environment()
     store = PhotoStore(active_settings.photo_dir, active_settings.maximum_photos)
-    camera = camera_service or CameraService(active_settings, store)
+    video_store: VideoStore | None = None
+    video_service: Picamera2Service | None = None
+    if active_settings.camera_backend == "picamera2":
+        video_store = VideoStore(active_settings.video_dir, active_settings.maximum_videos)
+        video_service = Picamera2Service(active_settings, video_store)
+    camera = camera_service or CameraService(
+        active_settings,
+        store,
+        video_service.capture_still if video_service is not None else None,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if video_service is not None:
+            await video_service.start()
+        try:
+            yield
+        finally:
+            if video_service is not None:
+                await video_service.stop()
+
     templates = Jinja2Templates(directory=APP_DIR / "templates")
 
-    application = FastAPI(title="raspi-camera-web", version="0.1.0")
+    application = FastAPI(title="raspi-camera-web", version="0.1.0", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
     application.state.photo_store = store
     application.state.camera_service = camera
+    application.state.video_store = video_store
+    application.state.video_service = video_service
 
     @application.get("/", include_in_schema=False)
     async def index(request: Request):
-        return templates.TemplateResponse(request=request, name="index.html")
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context={"live_stream_available": video_service is not None},
+        )
 
     @application.post(
         "/api/capture",
@@ -109,6 +145,29 @@ def create_app(
         if path is None:
             raise HTTPException(status_code=404, detail="Photo not found")
         return FileResponse(path, media_type="image/jpeg", stat_result=path.stat())
+
+    @application.get("/stream.mjpg", include_in_schema=False)
+    async def stream() -> StreamingResponse:
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Live stream is not available")
+        return StreamingResponse(
+            video_service.mjpeg_frames(),
+            media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY.decode('ascii')}",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.get("/api/videos", response_model=list[VideoResponse])
+    async def videos() -> list[VideoResponse]:
+        if video_store is None:
+            return []
+        return [VideoResponse(**asdict(video)) for video in video_store.list_videos()]
+
+    @application.get("/videos/{video_id}", response_class=FileResponse)
+    async def video(video_id: str) -> FileResponse:
+        path = video_store.resolve(video_id) if video_store is not None else None
+        if path is None:
+            raise HTTPException(status_code=404, detail="Video not found")
+        return FileResponse(path, media_type="video/mp4", stat_result=path.stat())
 
     return application
 

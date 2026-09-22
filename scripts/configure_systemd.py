@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Render and install host-specific systemd and application settings."""
+"""実機固有のsystemd unitとアプリ設定を生成する。
+
+使い方:
+    uv run python scripts/configure_systemd.py [OPTIONS]
+
+主要引数:
+    --dry-run                    生成内容だけを表示して書き込まない。
+    --enable-now                 生成後にsystemdを有効化して起動する。
+    --camera-backend BACKEND     fswebcam、rpicam、picamera2、mockから選択する。
+    --camera-device PATH         USBカメラのV4L2デバイスを指定する。
+    --photo-dir PATH             写真保存先を指定する。
+    --video-dir PATH             動画保存先を指定する。
+    --force                      既存のunitと環境ファイルを上書きする。
+
+全引数は `uv run python scripts/configure_systemd.py --help` で確認する。
+"""
 
 from __future__ import annotations
 
@@ -27,27 +42,58 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("0より大きい数値を指定してください")
+    return number
+
+
 def _default_user() -> str:
     return os.environ.get("SUDO_USER") or getpass.getuser()
 
 
-def _environment_value(value: str | Path | int) -> str:
+def _environment_value(value: str | Path | int | float) -> str:
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
 
-def build_environment(args: argparse.Namespace, photo_dir: Path) -> str:
-    values = (
+def _default_camera_command(camera_backend: str) -> str:
+    if camera_backend == "rpicam":
+        return "rpicam-still"
+    if camera_backend == "picamera2":
+        return "picamera2"
+    return "fswebcam"
+
+
+def build_environment(args: argparse.Namespace, photo_dir: Path, video_dir: Path) -> str:
+    values: tuple[tuple[str, str | Path | int | float], ...] = (
         ("PHOTO_DIR", photo_dir),
+        ("VIDEO_DIR", video_dir),
         ("CAMERA_BACKEND", args.camera_backend),
-        ("CAMERA_COMMAND", args.camera_command),
+        ("CAMERA_COMMAND", args.camera_command or _default_camera_command(args.camera_backend)),
         ("CAMERA_DEVICE", args.camera_device),
         ("CAMERA_WIDTH", args.camera_width),
         ("CAMERA_HEIGHT", args.camera_height),
         ("CAPTURE_TIMEOUT_SECONDS", args.capture_timeout_seconds),
         ("MINIMUM_CAPTURE_INTERVAL_SECONDS", args.minimum_capture_interval_seconds),
         ("MAXIMUM_PHOTOS", args.maximum_photos),
+        ("CAMERA_CAPTURE_DELAY_MS", args.camera_capture_delay_ms),
+        ("MAXIMUM_VIDEOS", args.maximum_videos),
+        ("VIDEO_WIDTH", args.video_width),
+        ("VIDEO_HEIGHT", args.video_height),
+        ("VIDEO_FPS", args.video_fps),
+        ("VIDEO_BITRATE", args.video_bitrate),
+        ("LIVE_STREAM_WIDTH", args.live_stream_width),
+        ("LIVE_STREAM_HEIGHT", args.live_stream_height),
+        ("LIVE_STREAM_FPS", args.live_stream_fps),
+        ("MOTION_THRESHOLD", args.motion_threshold),
+        ("MOTION_MINIMUM_CONSECUTIVE_FRAMES", args.motion_minimum_consecutive_frames),
+        ("MOTION_RECORD_SECONDS", args.motion_record_seconds),
+        ("MOTION_COOLDOWN_SECONDS", args.motion_cooldown_seconds),
     )
+    if args.camera_backend == "picamera2":
+        values += (("PYTHONPATH", "/usr/lib/python3/dist-packages"),)
     return "".join(f"{name}={_environment_value(value)}\n" for name, value in values)
 
 
@@ -57,6 +103,7 @@ def render_unit(
     group: str,
     project_dir: Path,
     photo_dir: Path,
+    video_dir: Path,
     env_path: Path,
     uv_path: Path,
 ) -> str:
@@ -65,6 +112,7 @@ def render_unit(
         "<your-group>": group,
         "<project-dir>": str(project_dir),
         "<photo-dir>": str(photo_dir),
+        "<video-dir>": str(video_dir),
         "<env-file>": str(env_path),
         "<uv-bin-dir>": str(uv_path.parent),
     }
@@ -99,9 +147,14 @@ def _parse_args() -> argparse.Namespace:
         help="写真保存先（既定: <project-dir>/data/photos）",
     )
     parser.add_argument(
-        "--camera-backend", choices=("fswebcam", "mock"), default="fswebcam"
+        "--camera-backend",
+        choices=("fswebcam", "rpicam", "picamera2", "mock"),
+        default="fswebcam",
     )
-    parser.add_argument("--camera-command", default="fswebcam")
+    parser.add_argument(
+        "--camera-command",
+        help="撮影コマンド（既定: fswebcam、rpicamではrpicam-still）",
+    )
     parser.add_argument("--camera-device", default="/dev/video0")
     parser.add_argument("--camera-width", type=_positive_int, default=1280)
     parser.add_argument("--camera-height", type=_positive_int, default=720)
@@ -110,6 +163,24 @@ def _parse_args() -> argparse.Namespace:
         "--minimum-capture-interval-seconds", type=_positive_int, default=5
     )
     parser.add_argument("--maximum-photos", type=_positive_int, default=100)
+    parser.add_argument("--camera-capture-delay-ms", type=_positive_int, default=1000)
+    parser.add_argument(
+        "--video-dir",
+        type=Path,
+        help="動画保存先（既定: <project-dir>/data/videos）",
+    )
+    parser.add_argument("--maximum-videos", type=_positive_int, default=20)
+    parser.add_argument("--video-width", type=_positive_int, default=1280)
+    parser.add_argument("--video-height", type=_positive_int, default=720)
+    parser.add_argument("--video-fps", type=_positive_int, default=15)
+    parser.add_argument("--video-bitrate", type=_positive_int, default=2_000_000)
+    parser.add_argument("--live-stream-width", type=_positive_int, default=640)
+    parser.add_argument("--live-stream-height", type=_positive_int, default=360)
+    parser.add_argument("--live-stream-fps", type=_positive_int, default=5)
+    parser.add_argument("--motion-threshold", type=_positive_float, default=12.0)
+    parser.add_argument("--motion-minimum-consecutive-frames", type=_positive_int, default=3)
+    parser.add_argument("--motion-record-seconds", type=_positive_int, default=20)
+    parser.add_argument("--motion-cooldown-seconds", type=_positive_int, default=30)
     parser.add_argument("--unit-path", type=Path, default=DEFAULT_UNIT_PATH)
     parser.add_argument("--env-path", type=Path, default=DEFAULT_ENV_PATH)
     parser.add_argument(
@@ -142,9 +213,15 @@ def main() -> int:
 
     project_dir = args.project_dir.expanduser().resolve()
     photo_dir = (args.photo_dir or project_dir / "data" / "photos").expanduser().resolve()
+    video_dir = (args.video_dir or project_dir / "data" / "videos").expanduser().resolve()
     uv_path = args.uv_path.expanduser().resolve()
-    if any(character.isspace() for character in f"{project_dir}{photo_dir}{uv_path}"):
-        print("エラー: project-dir、photo-dir、uv-pathに空白は使用できません。", file=sys.stderr)
+    if any(
+        character.isspace() for character in f"{project_dir}{photo_dir}{video_dir}{uv_path}"
+    ):
+        print(
+            "エラー: project-dir、photo-dir、video-dir、uv-pathに空白は使用できません。",
+            file=sys.stderr,
+        )
         return 2
     if not (project_dir / "app" / "main.py").is_file():
         print(f"エラー: {project_dir} にアプリが見つかりません。", file=sys.stderr)
@@ -160,10 +237,11 @@ def main() -> int:
         group_name,
         project_dir,
         photo_dir,
+        video_dir,
         args.env_path,
         uv_path,
     )
-    environment = build_environment(args, photo_dir)
+    environment = build_environment(args, photo_dir, video_dir)
 
     if args.dry_run:
         print(f"--- {args.unit_path} ---\n{unit}", end="")
@@ -195,6 +273,20 @@ def main() -> int:
                     "-m",
                     "0750",
                     str(photo_dir),
+                ),
+                check=True,
+            )
+            subprocess.run(
+                _privileged_command(
+                    "install",
+                    "-d",
+                    "-o",
+                    args.user,
+                    "-g",
+                    group_name,
+                    "-m",
+                    "0750",
+                    str(video_dir),
                 ),
                 check=True,
             )
@@ -233,6 +325,7 @@ def main() -> int:
     print(f"systemd unit: {args.unit_path}")
     print(f"環境設定: {args.env_path}")
     print(f"写真保存先: {photo_dir}")
+    print(f"動画保存先: {video_dir}")
 
     if args.enable_now:
         try:

@@ -211,6 +211,7 @@ tempCodeRunnerFile.py
 
 # Application runtime data
 /data/photos/
+/data/videos/
 /data/*.json
 /test*.jpg
 

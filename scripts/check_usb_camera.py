@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Check whether Linux exposes a usable USB Video4Linux2 capture device."""
+"""USB Video4Linux2カメラを診断する。
+
+使い方:
+    uv run python scripts/check_usb_camera.py [--device PATH]...
+
+引数:
+    --device PATH  確認するV4L2デバイス。複数回指定可能。
+                   省略時は /dev/video* をすべて確認する。
+"""
 
 from __future__ import annotations
 

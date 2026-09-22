@@ -60,6 +60,8 @@ class CameraService:
             self._capture_function = capture_function
         elif settings.camera_backend == "mock":
             self._capture_function = self._capture_with_mock
+        elif settings.camera_backend == "rpicam":
+            self._capture_function = self._capture_with_rpicam
         else:
             self._capture_function = self._capture_with_fswebcam
         self._clock = clock
@@ -126,6 +128,26 @@ class CameraService:
             "--no-banner",
             str(output_path),
         )
+        await self._run_camera_command(command)
+
+    async def _capture_with_rpicam(self, output_path: Path) -> None:
+        """Capture from a CSI camera using rpicam-still or libcamera-still."""
+        command = (
+            self.settings.camera_command,
+            "--nopreview",
+            "--width",
+            str(self.settings.camera_width),
+            "--height",
+            str(self.settings.camera_height),
+            "--timeout",
+            str(self.settings.camera_capture_delay_ms),
+            "--output",
+            str(output_path),
+        )
+        await self._run_camera_command(command)
+
+    async def _run_camera_command(self, command: tuple[str, ...]) -> None:
+        """Run a camera command without exposing its output through the API."""
 
         try:
             process = await asyncio.create_subprocess_exec(

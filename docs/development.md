@@ -44,7 +44,7 @@ uv run pytest
 - `GET /photos/{photo_id}`
 - `DELETE /api/photos/{photo_id}`
 - 撮影履歴の拡大表示、削除、8枚単位のページング
-- `fswebcam`を使うUSBカメラ撮影サービス
+- `fswebcam`を使うUSBカメラと、`rpicam-still`を使うCSIカメラの撮影サービス
 - `/dev/video0`、解像度、タイムアウトなどの環境変数設定
 - 同時撮影拒否
 - 最小撮影間隔による連打制限
@@ -82,6 +82,8 @@ Python 3.13のローカル環境では、次を確認済み。
 
 ```text
 fswebcam  Raspberry Pi上のUSBカメラ。既定値
+rpicam    リボンケーブル接続のRaspberry Piカメラモジュール
+picamera2 ライブ映像・動体検知録画用のRaspberry Piカメラモジュール
 mock      WSLやCI向け。外部カメラを使わない
 ```
 
@@ -95,7 +97,21 @@ WSLのモック確認で保証できるのは、Web画面、API、ファイル�
 
 - USBカメラのVideo4Linux2認識
 - `fswebcam`による実撮影
+- `rpicam-still`（または旧OSの`libcamera-still`）によるCSIカメラ実撮影
+- Picamera2によるライブ映像、動体検知、動画保存（使用時）
 - `video`グループの権限
 - systemdの自動起動と再起動
 - Tailscale Serve経由のHTTPS接続
 - Pi 3Bでのメモリ使用量と撮影時間
+
+## ライブ映像・動体検知の方針
+
+CSIカメラでライブ映像または動体検知録画を使う場合は、`CAMERA_BACKEND=picamera2`を指定する。このモードでは単発コマンドを実行せず、アプリケーション内のPicamera2サービスがカメラを一元的に所有する。`rpicam-still`とPicamera2を同時に起動してカメラを取り合わない。
+
+- ライブ映像は低解像度のMJPEGストリームとし、Pi 3Bでは既定で640x360・5fpsを上限の目安とする。
+- 動体検知はライブ用低解像度フレームの輝度を間引いた画素差分で行う。初期実装でOpenCVは導入しない。
+- 検知時はメインストリームをH.264で録画する。動画は写真とは別ディレクトリに保存し、保存本数の上限で整理する。
+- 高度な物体認識、追跡、OpenCVの導入は、Pi 3Bでの実機負荷を確認してから検討する。
+- Picamera2とlibcameraはRaspberry Pi OSが提供するAPTパッケージの組み合わせを使う。`pip install`や`uv add`で個別に導入しない。
+
+実機では、ライブ映像のレイテンシ、検知の誤作動、録画ファイルの再生、長時間のメモリ使用量、systemd再起動後のカメラ再初期化を確認する。

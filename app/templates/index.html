@@ -13,6 +13,16 @@
         <h1>Raspi Camera</h1>
       </header>
 
+      {% if live_stream_available %}
+      <section class="live-view" aria-labelledby="live-view-title">
+        <div class="section-heading">
+          <h2 id="live-view-title">ライブ映像</h2>
+          <span class="live-indicator">LIVE</span>
+        </div>
+        <img src="/stream.mjpg" alt="カメラのライブ映像">
+      </section>
+      {% endif %}
+
       <section class="capture-panel" aria-label="撮影操作">
         <button id="capture-button" class="capture-button" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true">

@@ -74,6 +74,30 @@ h2 {
   margin-bottom: 1.5rem;
 }
 
+.live-view {
+  margin-bottom: 2rem;
+}
+
+.live-view img {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  border: 1px solid #263247;
+  border-radius: 0.9rem;
+  background: #05070b;
+  object-fit: contain;
+}
+
+.live-indicator {
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: #ef6a6a;
+  color: #210707;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
 .section-heading h2 {
   margin-bottom: 0.25rem;
 }
