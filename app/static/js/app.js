@@ -294,6 +294,10 @@ function renderMotionAnalysis(payload) {
   motionOverlay.replaceChildren();
   motionOverlay.hidden = !motionDiagnostics.open;
   if (!motionDiagnostics.open) return;
+  if (!("analysis" in payload) || !("last_recording_trigger" in payload)) {
+    motionAnalysisStatus.textContent = "サーバーから判定情報が返されていません。サービスの更新・再起動を確認してください。";
+    return;
+  }
   const historical = motionAnalysisSource.value === "trigger";
   const analysis = historical ? payload.last_recording_trigger : payload.analysis;
   if (!historical && (payload.stream_state === "stale" || payload.state === "error")) {
@@ -353,7 +357,7 @@ async function fetchMotionJson(url, options = {}) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, cache: "no-store", signal: controller.signal });
     const payload = await response.json();
     return { response, payload };
   } finally {
@@ -527,6 +531,7 @@ if (previousVideoPageButton !== null && nextVideoPageButton !== null) {
 closeDialogButton.addEventListener("click", () => photoDialog.close());
 deletePhotoButton.addEventListener("click", deleteSelectedPhoto);
 if (motionToggle !== null) {
+  motionAnalysisStatus.textContent = "判定情報を取得中です。";
   motionToggle.addEventListener("click", toggleMotionDetection);
   motionDiagnostics.addEventListener("toggle", () => {
     if (motionStatus !== null) renderMotionAnalysis(motionStatus);

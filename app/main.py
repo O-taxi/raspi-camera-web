@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -113,6 +114,12 @@ def create_app(
                 await video_service.stop()
 
     templates = Jinja2Templates(directory=APP_DIR / "templates")
+    # Different URLs prevent a cached script from running against a new template.
+    # Compute once per process, not on every request to the Raspberry Pi.
+    asset_versions = {
+        name: sha256((APP_DIR / "static" / name).read_bytes()).hexdigest()[:16]
+        for name in ("css/style.css", "js/app.js")
+    }
 
     application = FastAPI(title="raspi-camera-web", version="0.1.0", lifespan=lifespan)
     application.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
@@ -126,7 +133,11 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"live_stream_available": video_service is not None},
+            context={
+                "live_stream_available": video_service is not None,
+                "asset_versions": asset_versions,
+            },
+            headers={"Cache-Control": "no-cache"},
         )
 
     @application.post(
@@ -201,9 +212,10 @@ def create_app(
         )
 
     @application.get("/api/motion", response_model=MotionStatusResponse)
-    async def motion_status() -> MotionStatusResponse:
+    async def motion_status(response: Response) -> MotionStatusResponse:
         if video_service is None:
             raise HTTPException(status_code=404, detail="Motion detection is not available")
+        response.headers["Cache-Control"] = "no-store"
         return MotionStatusResponse(**video_service.status())
 
     @application.put(
@@ -212,7 +224,7 @@ def create_app(
         responses={403: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
     )
     async def update_motion(
-        request: Request, settings: MotionSettingsRequest
+        request: Request, response: Response, settings: MotionSettingsRequest
     ) -> MotionStatusResponse:
         if request.headers.get("sec-fetch-site") == "cross-site":
             raise HTTPException(status_code=403, detail="Cross-site motion updates are not allowed")
@@ -222,6 +234,7 @@ def create_app(
             await video_service.set_motion_enabled(settings.enabled)
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=503, detail="Motion detection update failed") from exc
+        response.headers["Cache-Control"] = "no-store"
         return MotionStatusResponse(**video_service.status())
 
     @application.get("/api/videos", response_model=list[VideoResponse])

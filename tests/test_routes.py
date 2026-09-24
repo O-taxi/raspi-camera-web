@@ -1,12 +1,16 @@
 import json
+import re
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi import FastAPI
 
+import app.main as main_module
 from app.main import create_app
 from app.services.camera import CameraService
 from app.services.photos import PhotoStore
@@ -260,6 +264,36 @@ async def test_picamera_page_keeps_motion_control_visible_before_status_load(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("changed_asset", ["js/app.js", "css/style.css"])
+async def test_asset_urls_change_after_deployment(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_asset: str
+) -> None:
+    app_dir = tmp_path / "application"
+    for directory in ("templates", "static"):
+        shutil.copytree(main_module.APP_DIR / directory, app_dir / directory)
+    monkeypatch.setattr(main_module, "APP_DIR", app_dir)
+
+    async def asset_urls() -> dict[str, str]:
+        response = await asgi_request(create_app(settings), "GET", "/")
+        assert response.headers["cache-control"] == "no-cache"
+        urls = re.findall(r'(?:src|href)="([^"]+/static/[^"]+)"', response.content.decode())
+        return {urlsplit(url).path.removeprefix("/static/"): url for url in urls}
+
+    before = await asset_urls()
+    assert set(before) == {"js/app.js", "css/style.css"}
+    assert await asset_urls() == before
+    path = app_dir / "static" / changed_asset
+    path.write_bytes(path.read_bytes() + b"\n/* deployment update */\n")
+    after = await asset_urls()
+    assert after[changed_asset] != before[changed_asset]
+    unchanged = next(asset for asset in before if asset != changed_asset)
+    assert after[unchanged] == before[unchanged]
+    response = await asgi_request(create_app(settings), "GET", urlsplit(after[changed_asset]).path)
+    assert response.status_code == 200
+    assert response.content == path.read_bytes()
+
+
+@pytest.mark.asyncio
 async def test_motion_detection_can_be_remotely_disabled(settings, tmp_path: Path) -> None:
     video_settings = replace(
         settings,
@@ -279,10 +313,12 @@ async def test_motion_detection_can_be_remotely_disabled(settings, tmp_path: Pat
     )
 
     assert status_response.status_code == 200
+    assert status_response.headers["cache-control"] == "no-store"
     assert status_response.json()["enabled"] is True
     assert status_response.json()["stream_state"] == "starting"
     assert status_response.json()["last_frame_at"] is None
     assert update_response.status_code == 200
+    assert update_response.headers["cache-control"] == "no-store"
     assert update_response.json()["enabled"] is False
     assert update_response.json()["state"] == "disabled"
     assert video_settings.motion_state_path.is_file()

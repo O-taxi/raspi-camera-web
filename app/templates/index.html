@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Raspi Camera</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}?v={{ asset_versions['css/style.css'] }}">
   </head>
   <body>
     <main class="page-shell">
@@ -32,7 +32,7 @@
             <option value="trigger">直近の録画開始時</option>
           </select>
           <p>黄色は動きの候補、赤色は連続して検知した領域です。枠は約1秒ごとに更新し、ライブ映像とは時間差があります。録画開始時の枠も現在の映像に重ねます。</p>
-          <p id="motion-analysis-status">判定を待っています。</p>
+          <p id="motion-analysis-status">表示処理を読み込んでいます。長く続く場合はページを再読み込みしてください。</p>
         </details>
       </section>
       {% endif %}
@@ -100,6 +100,6 @@
       </div>
     </dialog>
 
-    <script src="{{ url_for('static', path='/js/app.js') }}" defer></script>
+    <script src="{{ url_for('static', path='/js/app.js') }}?v={{ asset_versions['js/app.js'] }}" defer></script>
   </body>
 </html>
