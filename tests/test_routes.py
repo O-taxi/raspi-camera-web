@@ -242,6 +242,24 @@ async def test_delete_video_rejects_cross_site_request(settings, tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_picamera_page_keeps_motion_control_visible_before_status_load(
+    settings, tmp_path: Path
+) -> None:
+    application = create_app(replace(
+        settings, camera_backend="picamera2", video_dir=tmp_path / "videos"
+    ))
+
+    response = await asgi_request(application, "GET", "/")
+
+    assert response.status_code == 200
+    html = response.content.decode("utf-8")
+    button_start = html.index('<button id="motion-toggle"')
+    button_tag = html[button_start:html.index(">", button_start)]
+    assert " hidden" not in button_tag
+    assert " disabled" in button_tag
+
+
+@pytest.mark.asyncio
 async def test_motion_detection_can_be_remotely_disabled(settings, tmp_path: Path) -> None:
     video_settings = replace(
         settings,

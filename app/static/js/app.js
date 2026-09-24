@@ -278,7 +278,6 @@ function renderMotionStatus(payload) {
   }
 
   if (motionToggle !== null) {
-    motionToggle.hidden = false;
     motionToggle.disabled = motionUpdateInProgress;
     motionToggle.classList.toggle("enabled", payload.enabled);
     motionToggle.textContent = payload.enabled ? "動体検知を停止" : "動体検知を開始";
