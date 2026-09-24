@@ -292,7 +292,8 @@ function renderMotionStatus(payload) {
 function renderMotionAnalysis(payload) {
   if (motionDiagnostics === null || motionOverlay === null) return;
   motionOverlay.replaceChildren();
-  motionOverlay.hidden = !motionDiagnostics.open;
+  // SVGElement does not reflect the HTML `hidden` property into its attributes.
+  motionOverlay.toggleAttribute("hidden", !motionDiagnostics.open);
   if (!motionDiagnostics.open) return;
   if (!("analysis" in payload) || !("last_recording_trigger" in payload)) {
     motionAnalysisStatus.textContent = "サーバーから判定情報が返されていません。サービスの更新・再起動を確認してください。";
