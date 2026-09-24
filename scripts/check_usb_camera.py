@@ -2,7 +2,7 @@
 """USB Video4Linux2カメラを診断する。
 
 使い方:
-    uv run python scripts/check_usb_camera.py [--device PATH]...
+    uv run --no-sync python scripts/check_usb_camera.py [--device PATH]...
 
 引数:
     --device PATH  確認するV4L2デバイス。複数回指定可能。

@@ -1,129 +1,65 @@
 ---
 title: 開発ガイド
-description: 開発環境、実装状況、カメラバックエンドの方針
+description: 開発環境と実装状況、未完了の作業
 ---
 
 # 開発ガイドと実装状況
 
 ## 開発環境
 
-- WSL Ubuntu 26.04
-- uv
-- uv管理のPython
-- 実カメラなしでも動作確認できるモック撮影モード
-
-Python、仮想環境、依存関係はuvへ統一します。`pip`を直接使用せず、`requirements.txt`との二重管理も行いません。
-
-想定する初期セットアップ：
+Pythonと依存関係は`uv`で管理します。開発環境を同期し、モックバックエンドでUvicornを起動します。
 
 ```bash
 uv python install 3.13
 uv python pin 3.13
 uv sync
+CAMERA_BACKEND=mock uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-開発サーバー：
+ブラウザーで`http://127.0.0.1:8000`を開きます。テストと静的検査のコマンドは`uv run pytest`と`uv run ruff check .`です。この文書は実行結果を記録する欄ではなく、作業状態を示すものです。直近の変更でこれらのコマンドを実行したかは、変更レビュー時の検証報告を確認してください。
 
-```bash
-CAMERA_BACKEND=mock uv run uvicorn app.main:app \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --reload
-```
+## 実装状況
 
-ブラウザーで `http://127.0.0.1:8000` を開きます。
+| 項目 | 状態 |
+| --- | --- |
+| FastAPI、Jinja2、Vanilla JavaScriptの画面と静的ファイル | 実装済み |
+| `fswebcam`、`rpicam`、`picamera2`、`mock`バックエンド | 実装済み |
+| 静止画の撮影、一覧、取得、削除と件数上限 | 実装済み |
+| Picamera2ライブMJPEGと動体検知によるMP4録画 | 実装済み |
+| 写真・動画履歴のページング、ダウンロード、削除 | 実装済み |
+| 動体検知ON/OFFの永続化と状態表示 | 実装済み |
+| 録画時間・ファイルサイズ・空き容量の上限処理 | 実装済み |
+| systemd unitとPi向け設定生成スクリプト | 実装済み |
 
-検証：
+HTTP契約、日時、設定変数、保存形式は[機能・API・設定仕様]({{ '/specification.html' | relative_url }})を正本とします。カメラバックエンドごとの使い分けは[ドキュメント索引]({{ '/' | relative_url }})を参照してください。
 
-```bash
-uv run ruff check .
-uv run pytest
-```
+## 未実装
 
-## 実装済み
+- 動体検知エリアの指定
+- 利用者ごとのアプリ認証・権限分け
+- USBカメラへのライブ映像・動体検知録画
+- 物体認識や追跡
 
-- FastAPIアプリケーションとJinja2テンプレート
-- レスポンシブな撮影画面
-- `POST /api/capture`
-- `GET /api/photos`
-- `GET /photos/{photo_id}`
-- `DELETE /api/photos/{photo_id}`
-- 撮影履歴の拡大表示、削除、8枚単位のページング
-- `fswebcam`を使うUSBカメラと、`rpicam-still`を使うCSIカメラの撮影サービス
-- `/dev/video0`、解像度、タイムアウトなどの環境変数設定
-- 同時撮影拒否
-- 最小撮影間隔による連打制限
-- 撮影タイムアウトとコマンド失敗の処理
-- 最大保存枚数を超えた古い写真の削除
-- 写真ID検証とパストラバーサル対策
-- クロスサイトブラウザー要求の拒否
-- systemd unit
-- カメラサービス、ファイル管理、HTTPルートのテストコード
-- Raspberry Pi、USBカメラ、Tailscaleのセットアップ文書
+利用者ごとの操作権限はアプリ内にありません。現状の公開範囲はTailscaleのネットワークポリシーで管理します。
 
-## uv移行とモック撮影の実装状況
+## 実機で未確認
 
-次の作業は完了している。
+この開発環境のモック動作は、Raspberry Piやカメラの実機動作を証明しません。次の項目は対象機器と実際の設置環境で確認が必要です。
 
-- 実行時依存関係と`dev` dependency groupの`pyproject.toml`への移行
-- 一時的な`requirements.txt`と`requirements-dev.txt`の削除
-- `.python-version`によるPython 3.13の指定
-- `uv.lock`の生成
-- `CAMERA_BACKEND=mock`と有効なJPEGを保存するモック撮影の実装
-- バックエンド設定とモック撮影の自動テスト
+- Raspberry Pi 3B上でのUSB撮影、V4L2権限、CSIカメラ診断
+- Picamera2のライブ映像、動体検知、H.264録画と再生
+- 録画ファイルサイズ・空き容量制限とディスク逼迫時の表示
+- systemdの再起動後におけるカメラ初期化と長時間稼働
+- Tailscale Serveの接続と端末アクセス制御
+- Pi 3BのCPU、メモリ、温度への負荷
 
-Python 3.13のローカル環境では、次を確認済み。
+このページでは上記の実機確認を完了扱いにしません。作業時は確認結果と使用した機器・OSを別途記録してください。
 
-- `uv sync`が成功する。
-- `uv run ruff check .`が成功する。
-- `uv run pytest`が成功する。
-- Uvicornを起動し、HTTP経由で撮影、JPEG取得、履歴更新が成功する。
+## 次に行う作業
 
-ブラウザー上の表示と操作感は、WSL上で別途目視確認する。
+1. `uv run ruff check .`と`uv run pytest`でソース変更を確認する。
+2. Raspberry Pi上で選択したバックエンドの診断と静止画撮影を行う。
+3. Picamera2利用時はライブ映像、録画、録画停止、保存制限、状態表示を確認する。
+4. systemd再起動、Tailscale Serve、許可外端末からの到達不可を確認する。
 
-## カメラバックエンドの方針
-
-`CAMERA_BACKEND`は次の値だけを受け付ける。
-
-```text
-fswebcam  Raspberry Pi上のUSBカメラ。既定値
-rpicam    リボンケーブル接続のRaspberry Piカメラモジュール
-picamera2 ライブ映像・動体検知録画用のRaspberry Piカメラモジュール
-mock      WSLやCI向け。外部カメラを使わない
-```
-
-未知の値は起動時に設定エラーとする。HTTPリクエストからバックエンドやコマンドを指定できるようにはしない。
-
-モックも実カメラと同じ`CameraService`の排他制御、タイムアウト、保存上限を通す。これにより、WSL上でも画面から撮影APIまでの一連の流れを確認できるようにする。
-
-## 実機との差分
-
-WSLのモック確認で保証できるのは、Web画面、API、ファイル保存、エラー処理までです。以下はRaspberry Pi上で別途確認する。
-
-- USBカメラのVideo4Linux2認識
-- `fswebcam`による実撮影
-- `rpicam-still`（または旧OSの`libcamera-still`）によるCSIカメラ実撮影
-- Picamera2によるライブ映像、動体検知、動画保存（使用時）
-- `video`グループの権限
-- systemdの自動起動と再起動
-- Tailscale Serve経由のHTTPS接続
-- Pi 3Bでのメモリ使用量と撮影時間
-
-## ライブ映像・動体検知の方針
-
-CSIカメラでライブ映像または動体検知録画を使う場合は、`CAMERA_BACKEND=picamera2`を指定する。このモードでは単発コマンドを実行せず、アプリケーション内のPicamera2サービスがカメラを一元的に所有する。`rpicam-still`とPicamera2を同時に起動してカメラを取り合わない。
-
-- ライブ映像はカラーの低解像度MJPEGストリームとし、Pi 3Bでは既定で640x360・5fpsを上限の目安とする。カメラからは互換性の高いYUV420で取得し、アプリ側でカラーMJPEGへ変換する。
-- 動体検知はライブ用低解像度YUV420フレームの輝度を間引いた画素差分で行う。初期実装でOpenCVは導入しない。
-- 全体の大半が同方向へ明暗変化した場合は照明変化として除外し、基準画像を更新して数秒間の待機後に検知を再開する。
-- 通常の動きは、画面を小領域へ分け、各領域内で差分がしきい値を超えた画素の割合で判定する。散在するノイズを抑えつつ、局所的な小動物の動きを調整しやすくする。
-- 録画終了時はカメラ全体を停止せず、録画用エンコーダーだけを停止してライブ映像を継続する。
-- 動体検知は画面または`PUT /api/motion`で遠隔からON/OFFできる。状態は動画保存先の`.motion-state.json`に保存する。
-- `MOTION_MAX_RECORD_SECONDS`で1動画の絶対上限を設け、継続した動きによる無制限な延長を防ぐ。
-- 動体検知を停止したとき、進行中の動画は保存せず破棄する。動画一覧は時間・ダウンロード・削除操作を持つ10件単位のページング表とし、削除時は再生時間メタデータも整理する。
-- 検知時はメインストリームをH.264で録画する。動画は写真とは別ディレクトリに保存し、保存本数の上限で整理する。
-- 録画済み動画は`GET /api/videos`で一覧し、`GET /videos/{video_id}`を添付ファイルとしてダウンロードし、`DELETE /api/videos/{video_id}`で削除する。Picamera2モードの画面には動画一覧、ダウンロード、削除操作を表示する。
-- 高度な物体認識、追跡、OpenCVの導入は、Pi 3Bでの実機負荷を確認してから検討する。
-- Picamera2とlibcameraはRaspberry Pi OSが提供するAPTパッケージの組み合わせを使う。`pip install`や`uv add`で個別に導入しない。
-
-実機では、ライブ映像のレイテンシ、検知の誤作動、録画ファイルの再生、長時間のメモリ使用量、systemd再起動後のカメラ再初期化を確認する。
+実機を利用できない開発では、未確認項目を残したままにし、モックや自動テストの結果と混同しません。

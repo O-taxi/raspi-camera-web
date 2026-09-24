@@ -5,6 +5,16 @@ description: Picamera2によるライブ映像と動体検知動画保存の設�
 
 # ライブ映像と動体検知録画
 
+## 目次
+
+- [対象と制約](#対象と制約)
+- [Raspberry Pi OSの準備](#raspberry-pi-osの準備)
+- [起動設定](#起動設定)
+- [動体検知の遠隔操作と録画上限](#動体検知の遠隔操作と録画上限)
+- [照明変化の除外](#照明変化の除外)
+- [systemd設定](#systemd設定)
+- [動作確認](#動作確認)
+
 ## 対象と制約
 
 この機能は、リボンケーブルで接続したRaspberry Piカメラモジュールを対象とします。USBカメラの`fswebcam`バックエンドでは利用できません。カメラはPicamera2サービスが常時1つだけ所有するため、`rpicam-still`などの別プロセスを並行して起動しないでください。
@@ -19,7 +29,7 @@ Raspberry Pi OSでPicamera2とFFmpegを導入します。Picamera2はlibcamera�
 ./scripts/install_raspberry_pi_dependencies.sh
 ```
 
-このスクリプトはカメラ関連パッケージに加え、uvとこのプロジェクトのロック済みPython依存関係まで導入します。APT操作だけでsudoを使うため、通常のログインユーザーで実行してください。
+このスクリプトはカメラ関連パッケージに加え、uvとこのプロジェクトのロック済みPython依存関係まで導入します。APT操作だけでsudoを使うため、通常のログインユーザーで実行してください。Pi上のPythonコマンドは既存環境を使う`uv run --no-sync`で実行します。
 
 アプリを起動するユーザーと同じ条件で、Picamera2を読み込めることを確認します。Picamera2はRaspberry Pi OSの`/usr/lib/python3/dist-packages`に入るため、uvで作る仮想環境からはこのパスを明示します。アプリの仮想環境はOSのPythonを基に作成してください。
 
@@ -28,6 +38,8 @@ uv sync --python /usr/bin/python3 --no-python-downloads --no-dev --locked
 PYTHONPATH=/usr/lib/python3/dist-packages \
 uv run --no-sync python -c 'from picamera2 import Picamera2; print(Picamera2.global_camera_info())'
 ```
+
+アプリまたはsystemdサービスを起動する前に、`uv run --no-sync python scripts/check_csi_camera.py --capture`でカメラ認識とJPEG撮影を確認します。Picamera2の稼働中には別プロセスのカメラ診断を実行しません。
 
 ## 起動設定
 
@@ -59,9 +71,11 @@ uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ## 動体検知の遠隔操作と録画上限
 
-Picamera2モードの画面には動体検知の開始・停止操作があります。確認ダイアログで停止を確定すると、ライブ映像は継続したまま新しい動体検知を止め、進行中の一時録画も保存せず破棄します。状態は`VIDEO_DIR`内の`.motion-state.json`へ保存するため、サービス再起動後も維持されます。
+Picamera2モードの画面には動体検知の開始・停止操作があります。確認ダイアログで停止を確定すると、ライブ映像は継続したまま新しい動体検知を止め、進行中の一時録画も保存せず破棄します。状態は`VIDEO_DIR`内の`.motion-state.json`へ保存するため、サービス再起動後も維持されます。保存状態は`MOTION_ENABLED`より優先され、状態ファイルがない場合は環境変数を初期値にします。不正または読み取り不能な状態ファイルがある場合はOFFで起動します。
 
-APIを使う場合は、現在の状態を`GET /api/motion`で取得し、次のように`PUT /api/motion`で切り替えられます。
+アプリへ接続できる全員が写真を撮影・削除し、動画を削除し、動体検知設定を変更できます。共有相手と端末はTailscaleのアクセス制御で絞ってください。
+
+APIを使う場合は、現在の状態を`GET /api/motion`で取得し、次のように`PUT /api/motion`で切り替えられます。応答には`enabled`に加えて`state`（`disabled`、`waiting`、`recording`、`cooldown`、`error`）、`stream_state`（`starting`、`streaming`、`stale`）、`last_frame_at`（UTC ISO 8601または`null`）、`error`（画面に表示できる短い文言または`null`）を含みます。`last_frame_at`は受信した最後のカメラフレーム時刻です。
 
 ```bash
 curl --request PUT http://127.0.0.1:8000/api/motion \
@@ -69,7 +83,11 @@ curl --request PUT http://127.0.0.1:8000/api/motion \
   --data '{"enabled": false}'
 ```
 
-`MOTION_MAX_RECORD_SECONDS`は、動きが継続しても1本の動画を必ず終了する絶対上限です。`MOTION_RECORD_SECONDS`（最後に動きを検知してから録画を続ける秒数）以上に設定してください。既定値は60秒です。`MOTION_MIN_RECORD_SECONDS`は保存する最小動画時間で、既定値は2秒です。録画終了後は既存の`MOTION_COOLDOWN_SECONDS`の間、新たな録画を開始しません。
+`MOTION_MAX_RECORD_SECONDS`は、1本の動画に設定する最大時間です。`MOTION_RECORD_SECONDS`（最後の検知後に録画を続ける秒数）以上に設定してください。既定値は60秒です。`MOTION_MIN_RECORD_SECONDS`は保存する最小録画時間で、既定値は2秒です。録画終了後は`MOTION_COOLDOWN_SECONDS`の間、新たな録画を開始しません。
+
+`MAXIMUM_VIDEO_BYTES`は、管理対象の確定済みMP4と録画中の`.part.mp4`を合わせた合計上限です。録画開始時は最大録画時間とビットレートから必要量を見積もり、容量や空きの確保が必要な場合だけ古い動画を整理します。保存本数の整理は新しい動画が確定してから行います。録画中は0.5秒ごとに空き容量を確認し、最低空き容量へ達した場合は録画を止めて、そこまでの動画を保存できるか試みます。ファイルシステムやエンコーダーが止まるまで時間がかかる場合があります。カメラ自体が応答停止した場合の終了・復旧時間は保証しません。
+
+フレーム受信やエンコーダーが失敗した場合は、録画を停止して動体検知のエラー状態を表示します。保存先の空き容量不足や書き込み失敗も状態表示で知らせます。
 
 ケージ内の小さく短い動きを記録したい場合は、最初は`MOTION_MINIMUM_CONSECUTIVE_FRAMES=2`に下げてください。見逃しがあるときだけ、`MOTION_THRESHOLD`を少しずつ下げるか、`MOTION_MIN_CHANGED_RATIO`を`0.10`から下げて実機映像で調整します。ケージ外の動きや照明変化による誤検知が多い場合は、次段階として検知エリア指定を追加します。
 
@@ -84,19 +102,20 @@ curl --request PUT http://127.0.0.1:8000/api/motion \
 ## systemd設定
 
 ```bash
-uv run python scripts/configure_systemd.py \
+uv run --no-sync python scripts/configure_systemd.py \
   --camera-backend picamera2 \
   --enable-now
 ```
+
+動画の本数・容量など保存先パス以外の変更は、`sudoedit /etc/raspi-camera-web.env`で必要な値を編集して、systemdサービスを再起動してください。`VIDEO_DIR`を変更するときはディレクトリの所有者とunitの`ReadWritePaths`も変更します。`configure_systemd.py --force --reset-settings`は未指定項目を既定値に戻すため、設定を再生成する場合はバックアップ、全オプションの指定、`--dry-run`差分確認を行います。
 
 動画の保存先は写真とは分離し、サービス実行ユーザーだけが書き込めるようにします。設定スクリプトは動画用の環境変数と、Picamera2用の`PYTHONPATH`を生成します。
 
 ## 動作確認
 
-1. `uv run --no-sync python scripts/check_csi_camera.py --capture`でカメラ認識とJPEG撮影を確認する。
-2. アプリ起動後に`/stream.mjpg`を開き、映像とCPU使用量を確認する。
-3. カメラ前で動き、`data/videos/`にMP4が作成されること、ブラウザーで再生できることを確認する。
-4. 誤検知、検知後の録画長、保存上限、数時間の連続稼働を確認する。
-5. `sudo systemctl restart raspi-camera-web.service`後に映像と録画が復旧することを確認する。
+1. アプリ起動後に`/stream.mjpg`を開き、映像とCPU使用量を確認する。
+2. カメラ前で動き、`data/videos/`にMP4が作成されること、ブラウザーで再生できることを確認する。
+3. 誤検知、検知後の録画長、保存上限、数時間の連続稼働を確認する。
+4. `sudo systemctl restart raspi-camera-web.service`後に映像と録画が復旧することを確認する。
 
 実機確認の前に、解像度やフレームレートを上げないでください。OpenCVによる解析や人物検出を追加する場合は、別途Pi 3Bでの負荷測定を行います。

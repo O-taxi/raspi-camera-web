@@ -2,7 +2,7 @@
 """CSI接続のRaspberry Piカメラを診断する。
 
 使い方:
-    uv run python scripts/check_csi_camera.py [--capture] [--width PIXELS]
+    uv run --no-sync python scripts/check_csi_camera.py [--capture] [--width PIXELS]
         [--height PIXELS] [--timeout-seconds SECONDS]
 
 引数:

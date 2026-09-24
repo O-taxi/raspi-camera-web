@@ -1,4 +1,12 @@
 :root {
+  --sidebar-width: 17rem;
+  --content-max-width: 58rem;
+  --page-gutter: clamp(1rem, 4vw, 4rem);
+  --space-xs: 0.45rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
   color: #e8eff7;
   background: #0c111b;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -16,7 +24,7 @@ body {
 
 .site-shell {
   display: grid;
-  grid-template-columns: 17rem minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -26,7 +34,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 2.5rem 1.5rem;
+  padding: var(--space-xl) var(--space-lg);
   border-right: 1px solid #263247;
   background:
     radial-gradient(circle at top left, rgb(26 117 159 / 24%), transparent 18rem),
@@ -57,7 +65,7 @@ nav {
 }
 
 nav a {
-  padding: 0.45rem 0.6rem;
+  padding: var(--space-xs) 0.6rem;
   border-radius: 0.45rem;
   color: #bdc9d8;
   font-size: 0.92rem;
@@ -65,7 +73,8 @@ nav a {
 }
 
 nav a:hover,
-nav a:focus-visible {
+nav a:focus-visible,
+nav a[aria-current="page"] {
   background: #203a50;
   color: #f5fbff;
   text-decoration: none;
@@ -79,9 +88,9 @@ nav a:focus-visible {
 }
 
 .content {
-  width: min(58rem, calc(100% - 8rem));
-  margin-left: 4rem;
-  padding: 4rem 0 2rem;
+  width: min(var(--content-max-width), calc(100% - var(--page-gutter) * 2));
+  margin-left: var(--page-gutter);
+  padding: var(--page-gutter) 0 2rem;
 }
 
 h1,
@@ -96,7 +105,7 @@ h1 {
 }
 
 h2 {
-  margin-top: 2.5rem;
+  margin-top: var(--space-xl);
   padding-top: 0.5rem;
   border-top: 1px solid #263247;
 }
@@ -126,6 +135,35 @@ pre {
   color: #e6f4ff;
 }
 
+table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  border: 1px solid #263247;
+  border-radius: 0.6rem;
+  background: #101827;
+}
+
+th,
+td {
+  min-width: 7rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 1px solid #263247;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #172337;
+  color: #f2f7fb;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
 pre code {
   padding: 0;
   background: transparent;
@@ -140,7 +178,7 @@ pre code {
   font-size: 0.85rem;
 }
 
-@media (max-width: 42rem) {
+@media (max-width: 52rem) {
   .site-shell {
     display: block;
   }
@@ -148,7 +186,7 @@ pre code {
   .sidebar {
     position: static;
     height: auto;
-    padding: 1.5rem 1rem;
+    padding: var(--space-lg) var(--space-md);
     border-right: 0;
     border-bottom: 1px solid #263247;
   }
@@ -165,7 +203,7 @@ pre code {
   nav {
     flex-direction: row;
     flex-wrap: wrap;
-    margin-top: 1.25rem;
+    margin-top: var(--space-md);
   }
 
   nav a {
@@ -174,8 +212,8 @@ pre code {
   }
 
   .content {
-    width: min(58rem, calc(100% - 2rem));
+    width: min(var(--content-max-width), calc(100% - 2rem));
     margin: 0 auto;
-    padding-top: 2rem;
+    padding-top: var(--space-lg);
   }
 }

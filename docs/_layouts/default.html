@@ -13,12 +13,13 @@
         <a class="site-title" href="{{ '/' | relative_url }}">raspi<br>camera</a>
         <p class="sidebar-label">DOCUMENTATION</p>
         <nav aria-label="ドキュメント">
-          <a href="{{ '/' | relative_url }}">はじめに</a>
-          <a href="{{ '/raspberry-pi-setup.html' | relative_url }}">セットアップ</a>
-          <a href="{{ '/video-and-motion.html' | relative_url }}">動画・検知</a>
-          <a href="{{ '/tailscale-setup.html' | relative_url }}">Tailscale</a>
-          <a href="{{ '/development.html' | relative_url }}">開発</a>
-          <a href="{{ '/github-pages.html' | relative_url }}">公開</a>
+          <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>はじめに</a>
+          <a href="{{ '/specification.html' | relative_url }}"{% if page.url == '/specification.html' %} aria-current="page"{% endif %}>仕様</a>
+          <a href="{{ '/raspberry-pi-setup.html' | relative_url }}"{% if page.url == '/raspberry-pi-setup.html' %} aria-current="page"{% endif %}>セットアップ</a>
+          <a href="{{ '/video-and-motion.html' | relative_url }}"{% if page.url == '/video-and-motion.html' %} aria-current="page"{% endif %}>動画・検知</a>
+          <a href="{{ '/tailscale-setup.html' | relative_url }}"{% if page.url == '/tailscale-setup.html' %} aria-current="page"{% endif %}>Tailscale</a>
+          <a href="{{ '/development.html' | relative_url }}"{% if page.url == '/development.html' %} aria-current="page"{% endif %}>開発</a>
+          <a href="{{ '/github-pages.html' | relative_url }}"{% if page.url == '/github-pages.html' %} aria-current="page"{% endif %}>公開</a>
         </nav>
       </aside>
       <main class="content">
