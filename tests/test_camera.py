@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -327,3 +329,184 @@ def test_scattered_pixel_noise_does_not_trigger_motion(settings, tmp_path: Path)
         detected = service._detect_motion(bytes(noisy_frame))
 
     assert not detected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_start", [False, True])
+async def test_disable_waits_for_pending_recording_start(
+    settings, tmp_path: Path, cancel_start: bool
+) -> None:
+    service = Picamera2Service(
+        replace(settings, motion_state_path=tmp_path / "motion.json"),
+        VideoStore(tmp_path / "videos", 3),
+    )
+    starting = threading.Event()
+    finish_start = threading.Event()
+    video_id = "20260923-120000-12345678"
+    temporary_path = service.video_store.path_for_recording(video_id)
+
+    class Camera:
+        def stop_encoder(self, _encoder: object) -> None:
+            pass
+
+    service._camera = Camera()
+
+    def slow_start(now: float) -> None:
+        starting.set()
+        assert finish_start.wait(3)
+        temporary_path.write_bytes(b"video")
+        service._recording_encoder = object()
+        service._recording = _Recording(video_id, temporary_path, now, now + 20, now + 60)
+
+    with patch.object(service, "_start_recording", side_effect=slow_start):
+        start = asyncio.create_task(service._update_recording(True))
+        assert await asyncio.to_thread(starting.wait, 2)
+        if cancel_start:
+            start.cancel()
+        disable = asyncio.create_task(service.set_motion_enabled(False))
+        try:
+            await asyncio.sleep(0.02)
+            assert not disable.done()
+        finally:
+            finish_start.set()
+        await asyncio.gather(start, return_exceptions=True)
+        assert not await asyncio.wait_for(disable, 2)
+        await service._update_recording(True)
+
+    assert service._recording is None
+    assert not temporary_path.exists()
+    assert service.video_store.list_videos() == []
+
+
+@pytest.mark.asyncio
+async def test_deadline_monitor_finishes_recording_while_frame_capture_waits(
+    settings, tmp_path: Path
+) -> None:
+    service = Picamera2Service(settings, VideoStore(tmp_path / "videos", 3))
+    frame_started = threading.Event()
+    release_frame = threading.Event()
+    encoder_stopped = threading.Event()
+    video_id = "20260923-120000-12345678"
+    path = service.video_store.path_for_recording(video_id)
+    path.write_bytes(b"video")
+    now = time.monotonic()
+    service._recording = _Recording(video_id, path, now - 5, now + 20, now + 0.05)
+    service._recording_encoder = object()
+
+    class Camera:
+        def stop_encoder(self, _encoder: object) -> None:
+            encoder_stopped.set()
+
+    service._camera = Camera()
+
+    def slow_frame() -> tuple[bytes, bytes]:
+        frame_started.set()
+        assert release_frame.wait(3)
+        return b"frame", b"jpeg"
+
+    with patch.object(service, "_capture_live_frame", side_effect=slow_frame):
+        producer = asyncio.create_task(service._produce_frames())
+        monitor = asyncio.create_task(service._monitor_recording())
+        try:
+            assert await asyncio.to_thread(frame_started.wait, 2)
+            assert await asyncio.to_thread(encoder_stopped.wait, 2)
+            assert not release_frame.is_set()
+        finally:
+            producer.cancel()
+            monitor.cancel()
+            release_frame.set()
+            await asyncio.gather(producer, monitor, return_exceptions=True)
+    assert service.video_store.resolve(video_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_frame_failure_stops_active_recording(settings, tmp_path: Path) -> None:
+    service = Picamera2Service(settings, VideoStore(tmp_path / "videos", 3))
+    service._recording = _Recording(
+        "20260923-120000-12345678", tmp_path / "video.part.mp4",
+        time.monotonic(), time.monotonic() + 20, time.monotonic() + 60,
+    )
+    with patch.object(service, "_capture_live_frame", side_effect=RuntimeError("camera fault")):
+        producer = asyncio.create_task(service._produce_frames())
+        try:
+            for _ in range(100):
+                if service._frame_error:
+                    break
+                await asyncio.sleep(0.01)
+            assert service._frame_error
+            with patch.object(service, "_finish_recording") as finish:
+                await service._check_recording()
+            finish.assert_called_once_with()
+            assert service.status()["state"] == "error"
+        finally:
+            producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+
+
+@pytest.mark.parametrize("contents", [b"broken", b'{"enabled": "false"}', b"\xff"])
+def test_invalid_saved_motion_state_disables_detection(
+    settings, tmp_path: Path, contents: bytes
+) -> None:
+    state_path = tmp_path / "motion.json"
+    state_path.write_bytes(contents)
+    service = Picamera2Service(
+        replace(settings, motion_enabled=True, motion_state_path=state_path),
+        VideoStore(tmp_path / "videos", 3),
+    )
+    assert not service._load_motion_enabled()
+
+
+def test_missing_motion_state_uses_environment_default(settings, tmp_path: Path) -> None:
+    service = Picamera2Service(
+        replace(settings, motion_enabled=True, motion_state_path=tmp_path / "missing.json"),
+        VideoStore(tmp_path / "videos", 3),
+    )
+    assert service._load_motion_enabled()
+
+
+def test_motion_status_marks_old_frames_stale(settings, tmp_path: Path) -> None:
+    service = Picamera2Service(settings, VideoStore(tmp_path / "videos", 3))
+    service._last_frame_at = "2026-09-25T01:00:00+00:00"
+    service._last_frame_monotonic = time.monotonic() - 10
+    assert service.status()["enabled"]
+    assert service.status()["stream_state"] == "stale"
+    assert service.status()["state"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_storage_pressure_stops_recording_and_reports_error(settings, tmp_path: Path) -> None:
+    service = Picamera2Service(settings, VideoStore(tmp_path / "videos", 3))
+    now = time.monotonic()
+    service._recording = _Recording(
+        "20260923-120000-12345678", tmp_path / "video.part.mp4", now, now + 20, now + 60,
+    )
+    with patch.object(service.video_store, "has_recording_space", return_value=False), patch.object(
+        service, "_finish_recording"
+    ) as finish:
+        await service._check_recording()
+    finish.assert_called_once_with()
+    assert service.status()["error"] == "Video storage is full"
+
+
+@pytest.mark.asyncio
+async def test_failed_encoder_stop_does_not_report_success(settings, tmp_path: Path) -> None:
+    service = Picamera2Service(
+        replace(settings, motion_state_path=tmp_path / "motion.json"),
+        VideoStore(tmp_path / "videos", 3),
+    )
+    service._recording = _Recording(
+        "20260923-120000-12345678", tmp_path / "video.part.mp4", 0, 20, 60,
+    )
+
+    class Camera:
+        def stop_encoder(self, _encoder: object) -> None:
+            raise RuntimeError("device output must remain private")
+
+    service._camera = Camera()
+    service._recording_encoder = object()
+    with pytest.raises(RuntimeError, match="Recording stop failed"):
+        await service.set_motion_enabled(False)
+    assert service._recording is not None
+    assert service._recording_encoder is not None
+    assert service.status()["state"] == "error"
+    assert service.status()["error"] == "Recording stop failed"

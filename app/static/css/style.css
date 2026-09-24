@@ -33,6 +33,12 @@ button:disabled {
   opacity: 0.55;
 }
 
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #f7c75b;
+  outline-offset: 3px;
+}
+
 .page-shell {
   width: min(68rem, calc(100% - 2rem));
   margin: 0 auto;
@@ -88,14 +94,58 @@ h2 {
   object-fit: contain;
 }
 
+.stream-status {
+  margin: 0.65rem 0;
+  color: #a9b4c5;
+  font-size: 0.9rem;
+}
+
+.stream-status.error {
+  color: #ffadb6;
+}
+
+.motion-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1.25rem;
+  margin: 0.65rem 0;
+  color: #a9b4c5;
+  font-size: 0.85rem;
+}
+
+.motion-status strong {
+  color: #edf2f7;
+}
+
+.motion-error {
+  flex-basis: 100%;
+  color: #ffadb6;
+}
+
+.motion-warning {
+  margin: 0.65rem 0;
+  color: #f1d89a;
+  font-size: 0.82rem;
+}
+
 .live-indicator {
   padding: 0.25rem 0.5rem;
   border-radius: 999px;
-  background: #ef6a6a;
-  color: #210707;
+  background: #39465a;
+  color: #e3eaf3;
   font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.08em;
+}
+
+.live-indicator.is-live {
+  background: #245d49;
+  color: #d9ffed;
+}
+
+.live-indicator.is-stale {
+  background: #5a292f;
+  color: #ffe0e3;
 }
 
 .live-controls {

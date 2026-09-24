@@ -1,7 +1,9 @@
 from argparse import Namespace
 from pathlib import Path
 
-from scripts.configure_systemd import build_environment, render_unit
+import pytest
+
+from scripts.configure_systemd import build_environment, render_unit, validate_overwrite
 
 
 def test_render_unit_replaces_host_specific_values() -> None:
@@ -51,6 +53,8 @@ def test_build_environment_contains_camera_settings() -> None:
         maximum_photos=50,
         camera_capture_delay_ms=1000,
         maximum_videos=20,
+        maximum_video_bytes=500_000_000,
+        minimum_free_disk_bytes=100_000_000,
         video_width=1280,
         video_height=720,
         video_fps=15,
@@ -97,6 +101,8 @@ def test_build_environment_defaults_to_rpicam_still_for_csi_camera() -> None:
         maximum_photos=100,
         camera_capture_delay_ms=1000,
         maximum_videos=20,
+        maximum_video_bytes=500_000_000,
+        minimum_free_disk_bytes=100_000_000,
         video_width=1280,
         video_height=720,
         video_fps=15,
@@ -135,6 +141,8 @@ def test_build_environment_adds_system_packages_for_picamera2() -> None:
         maximum_photos=100,
         camera_capture_delay_ms=1000,
         maximum_videos=20,
+        maximum_video_bytes=500_000_000,
+        minimum_free_disk_bytes=100_000_000,
         video_width=1280,
         video_height=720,
         video_fps=15,
@@ -160,3 +168,20 @@ def test_build_environment_adds_system_packages_for_picamera2() -> None:
 
     assert 'CAMERA_COMMAND="picamera2"' in environment
     assert 'PYTHONPATH="/usr/lib/python3/dist-packages"' in environment
+
+
+@pytest.mark.parametrize("force,reset", [(False, False), (False, True), (True, False)])
+def test_existing_configuration_requires_explicit_reset(tmp_path, force, reset) -> None:
+    env = tmp_path / "app.env"
+    env.write_text('CAMERA_BACKEND="picamera2"\n', encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        validate_overwrite(tmp_path / "app.service", env, force=force, reset_settings=reset)
+    assert env.read_text(encoding="utf-8") == 'CAMERA_BACKEND="picamera2"\n'
+
+
+def test_configuration_allows_initial_install_and_explicit_reset(tmp_path) -> None:
+    unit = tmp_path / "app.service"
+    env = tmp_path / "app.env"
+    validate_overwrite(unit, env, force=False, reset_settings=False)
+    env.touch()
+    validate_overwrite(unit, env, force=True, reset_settings=True)

@@ -20,12 +20,20 @@ const previousVideoPageButton = document.querySelector("#previous-video-page");
 const nextVideoPageButton = document.querySelector("#next-video-page");
 const videoPageInfo = document.querySelector("#video-page-info");
 const motionToggle = document.querySelector("#motion-toggle");
+const liveIndicator = document.querySelector("#live-indicator");
+const streamStatus = document.querySelector("#stream-status");
+const motionStateLabel = document.querySelector("#motion-state");
+const lastFrameTime = document.querySelector("#last-frame-time");
+const motionError = document.querySelector("#motion-error");
 
 const photosPerPage = 8;
 const videosPerPage = 10;
 let photos = [];
 let videos = [];
-let motionEnabled = null;
+let motionStatus = null;
+let motionStatusRequestToken = 0;
+let motionStatusRequestInProgress = false;
+let motionUpdateInProgress = false;
 let currentPage = 1;
 let currentVideoPage = 1;
 let selectedPhoto = null;
@@ -243,65 +251,179 @@ async function deleteVideo(video, deleteButton) {
   }
 }
 
-function renderMotionToggle() {
-  if (motionToggle === null || motionEnabled === null) {
-    return;
+const motionStateLabels = {
+  disabled: "停止中",
+  waiting: "検知待機中",
+  recording: "録画中",
+  cooldown: "次の検知まで待機中",
+  error: "エラー",
+};
+
+const streamStateLabels = {
+  starting: "カメラ映像の起動中",
+  streaming: "ライブ映像を受信中",
+  stale: "映像の更新が止まっています",
+};
+
+const publicErrorMessages = {
+  "Video storage is full": "動画の保存容量が上限に達しました。",
+  "Recording failed": "動画の録画に失敗しました。",
+  "Recording stop failed": "録画を停止できませんでした。",
+  "Live frame unavailable": "ライブ映像のフレームを受信できません。",
+};
+
+function publicErrorMessage(message) {
+  return publicErrorMessages[message] || "動体検知でエラーが発生しました。";
+}
+
+function renderMotionStatus(payload) {
+  motionStatus = payload;
+  if (liveIndicator !== null) {
+    const label = streamStateLabels[payload.stream_state] || "映像の状態は不明です";
+    liveIndicator.textContent = payload.stream_state === "streaming" ? "LIVE" : "確認中";
+    liveIndicator.classList.toggle("is-live", payload.stream_state === "streaming");
+    liveIndicator.classList.toggle("is-stale", payload.stream_state === "stale");
+    liveIndicator.setAttribute("aria-label", label);
+  }
+  if (streamStatus !== null) {
+    streamStatus.textContent = streamStateLabels[payload.stream_state] || "映像の状態は不明です";
+    streamStatus.classList.toggle("error", payload.stream_state === "stale");
+  }
+  if (motionStateLabel !== null) {
+    motionStateLabel.textContent = motionStateLabels[payload.state] || "状態不明";
+  }
+  if (lastFrameTime !== null) {
+    lastFrameTime.textContent = payload.last_frame_at
+      ? `最終フレーム: ${formatDate(payload.last_frame_at)}`
+      : "最終フレーム: 未受信";
+  }
+  if (motionError !== null) {
+    motionError.textContent = payload.error ? publicErrorMessage(payload.error) : "";
+    motionError.hidden = !payload.error;
   }
 
-  motionToggle.disabled = false;
-  motionToggle.classList.toggle("enabled", motionEnabled);
-  motionToggle.setAttribute("aria-pressed", String(motionEnabled));
-  motionToggle.textContent = motionEnabled
-    ? "動体検知を停止"
-    : "動体検知を開始";
+  if (motionToggle !== null) {
+    motionToggle.disabled = motionUpdateInProgress;
+    motionToggle.classList.toggle("enabled", payload.enabled);
+    motionToggle.setAttribute("aria-pressed", String(payload.enabled));
+    motionToggle.textContent = payload.enabled ? "動体検知を停止" : "動体検知を開始";
+  }
+}
+
+function showMotionConnectionError() {
+  if (liveIndicator !== null) {
+    liveIndicator.textContent = "接続エラー";
+    liveIndicator.classList.remove("is-live");
+    liveIndicator.classList.add("is-stale");
+    liveIndicator.setAttribute("aria-label", "カメラ状態を取得できません");
+  }
+  if (streamStatus !== null) {
+    streamStatus.textContent = "カメラ状態を取得できません。接続を確認しています。";
+    streamStatus.classList.add("error");
+  }
+  if (motionStateLabel !== null) {
+    motionStateLabel.textContent = "接続エラー";
+  }
+  if (lastFrameTime !== null) {
+    lastFrameTime.textContent = "最終フレーム: 状態を取得できません";
+  }
+  if (motionError !== null) {
+    motionError.textContent = "動体検知の状態に接続できません。再接続しています。";
+    motionError.hidden = false;
+  }
+  if (motionToggle !== null) {
+    motionToggle.disabled = true;
+    motionToggle.textContent = "接続を確認しています…";
+  }
+}
+
+async function fetchMotionJson(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const payload = await response.json();
+    return { response, payload };
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 async function loadMotionStatus() {
-  if (motionToggle === null) {
+  if (
+    motionToggle === null
+    || motionUpdateInProgress
+    || motionStatusRequestInProgress
+    || document.visibilityState !== "visible"
+  ) {
     return;
   }
-
+  motionStatusRequestInProgress = true;
+  const requestToken = ++motionStatusRequestToken;
   try {
-    const response = await fetch("/api/motion", { headers: { Accept: "application/json" } });
+    const { response, payload } = await fetchMotionJson("/api/motion", {
+      headers: { Accept: "application/json" },
+    });
     if (!response.ok) {
       throw new Error("動体検知の状態を取得できませんでした。");
     }
-    const payload = await response.json();
-    motionEnabled = payload.enabled;
-    renderMotionToggle();
+    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress) {
+      return;
+    }
+    renderMotionStatus(payload);
   } catch (error) {
-    motionToggle.textContent = "動体検知の状態を取得できません";
-    setStatus(error.message, true);
+    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress) {
+      return;
+    }
+    showMotionConnectionError();
+  } finally {
+    motionStatusRequestInProgress = false;
   }
 }
 
 async function toggleMotionDetection() {
-  if (motionToggle === null || motionEnabled === null) {
+  if (motionToggle === null || motionStatus === null || motionUpdateInProgress) {
     return;
   }
 
-  const nextEnabled = !motionEnabled;
+  const nextEnabled = !motionStatus.enabled;
   const action = nextEnabled ? "開始" : "停止";
-  if (!window.confirm(`動体検知を${action}しますか？`)) {
+  const confirmation = nextEnabled
+    ? "動体検知を開始しますか？"
+    : "動体検知を停止しますか？録画中の動画は保存されず、破棄されます。";
+  if (!window.confirm(confirmation)) {
     return;
   }
+  motionUpdateInProgress = true;
+  let updateSucceeded = false;
+  const requestToken = ++motionStatusRequestToken;
   motionToggle.disabled = true;
+  motionToggle.textContent = `動体検知を${action}中…`;
   try {
-    const response = await fetch("/api/motion", {
+    const { response, payload } = await fetchMotionJson("/api/motion", {
       method: "PUT",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ enabled: nextEnabled }),
     });
-    const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.detail || "動体検知を切り替えられませんでした。");
     }
-    motionEnabled = payload.enabled;
-    renderMotionToggle();
-    setStatus(motionEnabled ? "動体検知を開始しました。" : "動体検知を停止しました。");
+    if (requestToken === motionStatusRequestToken) {
+      renderMotionStatus(payload);
+      updateSucceeded = true;
+      setStatus(payload.enabled ? "動体検知を開始しました。" : "動体検知を停止しました。");
+    }
   } catch (error) {
-    renderMotionToggle();
-    setStatus(error.message, true);
+    if (requestToken === motionStatusRequestToken) {
+      showMotionConnectionError();
+      setStatus(error.message, true);
+    }
+  } finally {
+    motionUpdateInProgress = false;
+    if (updateSucceeded && motionStatus !== null) {
+      renderMotionStatus(motionStatus);
+    }
+    loadMotionStatus();
   }
 }
 
@@ -403,11 +525,21 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     loadPhotos();
     loadVideos();
+    loadMotionStatus();
   }
 });
 loadPhotos();
 loadVideos();
-loadMotionStatus();
+if (document.visibilityState === "visible") {
+  loadMotionStatus();
+}
+if (motionToggle !== null) {
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      loadMotionStatus();
+    }
+  }, 3000);
+}
 if (videoList !== null) {
   window.setInterval(loadVideos, 10_000);
 }

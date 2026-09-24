@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -260,7 +261,28 @@ async def test_motion_detection_can_be_remotely_disabled(settings, tmp_path: Pat
     )
 
     assert status_response.status_code == 200
-    assert status_response.json() == {"enabled": True}
+    assert status_response.json()["enabled"] is True
+    assert status_response.json()["stream_state"] == "starting"
+    assert status_response.json()["last_frame_at"] is None
     assert update_response.status_code == 200
-    assert update_response.json() == {"enabled": False}
+    assert update_response.json()["enabled"] is False
+    assert update_response.json()["state"] == "disabled"
     assert video_settings.motion_state_path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_motion_stop_failure_returns_private_json_error(settings, tmp_path, monkeypatch):
+    application = create_app(replace(
+        settings, camera_backend="picamera2", video_dir=tmp_path / "videos",
+        motion_state_path=tmp_path / "videos" / ".motion-state.json",
+    ))
+    monkeypatch.setattr(
+        application.state.video_service, "set_motion_enabled",
+        AsyncMock(side_effect=RuntimeError("private device path and output")),
+    )
+    response = await asgi_request(
+        application, "PUT", "/api/motion",
+        headers={"Content-Type": "application/json"}, body=b'{"enabled": false}',
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Motion detection update failed"}

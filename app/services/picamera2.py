@@ -6,15 +6,15 @@ import json
 import logging
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.config import Settings
-from app.services.videos import VideoStore
+from app.services.videos import VideoStorageFullError, VideoStore
 
 LOGGER = logging.getLogger(__name__)
 MJPEG_BOUNDARY = b"frame"
@@ -38,10 +38,12 @@ class Picamera2Service:
         self.video_store = video_store
         self._camera: Any | None = None
         self._camera_lock = threading.Lock()
+        self._control_lock = asyncio.Lock()
         self._frame_condition = asyncio.Condition()
         self._latest_jpeg: bytes | None = None
         self._frame_version = 0
         self._producer_task: asyncio.Task[None] | None = None
+        self._monitor_task: asyncio.Task[None] | None = None
         self._previous_luma: bytes | None = None
         self._motion_frames = 0
         self._recording: _Recording | None = None
@@ -51,28 +53,46 @@ class Picamera2Service:
         self._motion_settling_until = 0.0
         self._motion_enabled = settings.motion_enabled
         self._started = False
+        self._stopping = False
+        self._last_frame_at: str | None = None
+        self._last_frame_monotonic: float | None = None
+        self._started_at: float | None = None
+        self._frame_error = False
+        self._recording_error: str | None = None
 
     async def start(self) -> None:
         if self._started:
             return
         self._motion_enabled = await asyncio.to_thread(self._load_motion_enabled)
+        await asyncio.to_thread(self.video_store.recover)
         await asyncio.to_thread(self._open_camera)
+        self._stopping = False
         self._started = True
+        self._started_at = time.monotonic()
         self._producer_task = asyncio.create_task(self._produce_frames())
+        self._monitor_task = asyncio.create_task(self._monitor_recording())
 
     async def stop(self) -> None:
-        producer_task = self._producer_task
+        self._stopping = True
+        tasks = [task for task in (self._producer_task, self._monitor_task) if task is not None]
         self._producer_task = None
-        if producer_task is not None:
-            producer_task.cancel()
+        self._monitor_task = None
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
             try:
-                await producer_task
+                await task
             except asyncio.CancelledError:
                 pass
 
-        if self._started:
-            await asyncio.to_thread(self._close_camera)
+        try:
+            async with self._control_lock:
+                if self._started:
+                    await self._run_control(self._close_camera)
+        finally:
             self._started = False
+            async with self._frame_condition:
+                self._frame_condition.notify_all()
 
     async def capture_still(self, output_path: Path) -> None:
         if not self._started:
@@ -83,15 +103,63 @@ class Picamera2Service:
     def motion_enabled(self) -> bool:
         return self._motion_enabled
 
+    def status(self) -> dict[str, Any]:
+        now = time.monotonic()
+        last_activity = self._last_frame_monotonic
+        if last_activity is None:
+            last_activity = self._started_at
+        stale = self._frame_error or (
+            last_activity is not None
+            and now - last_activity > max(3, 3 / self.settings.live_stream_fps)
+        )
+        stream_state = "stale" if stale else (
+            "starting" if self._last_frame_at is None else "streaming"
+        )
+        error = self._recording_error or ("Live frame unavailable" if stale else None)
+        if error is not None:
+            state = "error"
+        elif self._recording is not None:
+            state = "recording"
+        elif not self._motion_enabled:
+            state = "disabled"
+        elif now - self._last_recording_finished_at < self.settings.motion_cooldown_seconds:
+            state = "cooldown"
+        else:
+            state = "waiting"
+        return {
+            "enabled": self._motion_enabled,
+            "state": state,
+            "stream_state": stream_state,
+            "last_frame_at": self._last_frame_at,
+            "error": error,
+        }
+
+    async def _run_control(self, operation: Callable[..., Any], *args: Any) -> Any:
+        # Cancellation must not release the control lock while its thread still mutates the camera.
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
     async def set_motion_enabled(self, enabled: bool) -> bool:
-        await asyncio.to_thread(self._save_motion_enabled, enabled)
-        self._motion_enabled = enabled
-        self._previous_luma = None
-        self._motion_frames = 0
-        self._motion_settling_until = 0.0
-        if not enabled and self._recording is not None:
-            await asyncio.to_thread(self._finish_recording, True)
-        return self._motion_enabled
+        async with self._control_lock:
+            if self._stopping:
+                raise RuntimeError("Camera is stopping")
+            await self._run_control(self._save_motion_enabled, enabled)
+            self._motion_enabled = enabled
+            self._previous_luma = None
+            self._motion_frames = 0
+            self._motion_settling_until = 0.0
+            if not enabled and self._recording is not None:
+                try:
+                    await self._run_control(self._finish_recording, True)
+                except Exception as exc:
+                    self._recording_error = "Recording stop failed"
+                    raise RuntimeError("Recording stop failed") from exc
+            self._recording_error = None
+            return self._motion_enabled
 
     async def mjpeg_frames(self) -> AsyncIterator[bytes]:
         version = -1
@@ -161,7 +229,10 @@ class Picamera2Service:
         while True:
             started_at = time.monotonic()
             try:
-                luma, jpeg = await asyncio.to_thread(self._capture_live_frame)
+                luma, jpeg = await self._run_control(self._capture_live_frame)
+                self._last_frame_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                self._last_frame_monotonic = time.monotonic()
+                self._frame_error = False
                 if self._motion_enabled:
                     motion_detected = self._detect_motion(luma)
                     await self._update_recording(motion_detected)
@@ -175,11 +246,43 @@ class Picamera2Service:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self._frame_error = True
                 LOGGER.exception("Picamera2 live frame capture failed")
                 await asyncio.sleep(1)
                 continue
 
             await asyncio.sleep(max(0, interval - (time.monotonic() - started_at)))
+
+    async def _monitor_recording(self) -> None:
+        # This task remains active when frame capture fails or waits on hardware.
+        while True:
+            try:
+                await self._check_recording()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._recording_error = "Recording stop failed"
+                LOGGER.exception("Recording monitor failed")
+            await asyncio.sleep(0.5)
+
+    async def _check_recording(self) -> None:
+        async with self._control_lock:
+            recording = self._recording
+            if recording is None:
+                return
+            now = time.monotonic()
+            if not self._motion_enabled:
+                await self._run_control(self._finish_recording, True)
+            elif (
+                now >= min(recording.deadline, recording.maximum_deadline)
+                or self.status()["stream_state"] == "stale"
+            ):
+                await self._run_control(self._finish_recording)
+            elif not await self._run_control(
+                self.video_store.has_recording_space, recording.temporary_path
+            ):
+                self._recording_error = "Video storage is full"
+                await self._run_control(self._finish_recording)
 
     def _capture_live_frame(self) -> tuple[bytes, bytes]:
         camera = self._require_camera()
@@ -278,27 +381,47 @@ class Picamera2Service:
         return self._motion_frames >= self.settings.motion_minimum_consecutive_frames
 
     async def _update_recording(self, motion_detected: bool) -> None:
+        async with self._control_lock:
+            if not self._motion_enabled or self._stopping:
+                return
+            try:
+                await self._update_recording_locked(motion_detected)
+            except VideoStorageFullError:
+                self._recording_error = "Video storage is full"
+                self._last_recording_finished_at = time.monotonic()
+            except Exception:
+                self._recording_error = "Recording failed"
+                self._last_recording_finished_at = time.monotonic()
+                LOGGER.exception("Motion recording failed")
+
+    async def _update_recording_locked(self, motion_detected: bool) -> None:
         now = time.monotonic()
         recording = self._recording
         if recording is not None:
             if now >= recording.maximum_deadline:
-                await asyncio.to_thread(self._finish_recording)
+                await self._run_control(self._finish_recording)
             elif motion_detected:
                 recording.deadline = min(
                     now + self.settings.motion_record_seconds,
                     recording.maximum_deadline,
                 )
             elif now >= recording.deadline:
-                await asyncio.to_thread(self._finish_recording)
+                await self._run_control(self._finish_recording)
             return
 
         if (
             motion_detected
             and now - self._last_recording_finished_at >= self.settings.motion_cooldown_seconds
         ):
-            await asyncio.to_thread(self._start_recording, now)
+            await self._run_control(self._start_recording, now)
+            self._recording_error = None
 
     def _start_recording(self, now: float) -> None:
+        # Include a margin for container overhead; the monitor also checks actual disk usage.
+        expected_bytes = int(
+            self.settings.video_bitrate * self.settings.motion_max_record_seconds / 8 * 1.1
+        )
+        self.video_store.prepare_recording(expected_bytes)
         try:
             from picamera2.encoders import H264Encoder
             from picamera2.outputs import FfmpegOutput
@@ -327,10 +450,11 @@ class Picamera2Service:
         camera = self._camera
         if recording is None or camera is None:
             return
+        # Keep the encoder reference if stop fails so the monitor can retry it.
+        with self._camera_lock:
+            if self._recording_encoder is not None:
+                camera.stop_encoder(self._recording_encoder)
         try:
-            with self._camera_lock:
-                if self._recording_encoder is not None:
-                    camera.stop_encoder(self._recording_encoder)
             final_path = self.video_store.path_for_new_video(recording.video_id)
             duration_seconds = time.monotonic() - recording.started_at
             if (
@@ -340,8 +464,11 @@ class Picamera2Service:
                 and recording.temporary_path.stat().st_size > 0
             ):
                 recording.temporary_path.replace(final_path)
-                self.video_store.set_duration(recording.video_id, duration_seconds)
-                self.video_store.remove_excess()
+                try:
+                    self.video_store.set_duration(recording.video_id, duration_seconds)
+                finally:
+                    # A metadata write failure must not skip retention on a nearly full disk.
+                    self.video_store.remove_excess()
             else:
                 recording.temporary_path.unlink(missing_ok=True)
         finally:
@@ -355,15 +482,15 @@ class Picamera2Service:
             state = json.loads(self.settings.motion_state_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return self.settings.motion_enabled
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             LOGGER.warning("Unable to read motion detection state: %s", exc)
-            return self.settings.motion_enabled
+            return False
 
         enabled = state.get("enabled") if isinstance(state, dict) else None
         if isinstance(enabled, bool):
             return enabled
-        LOGGER.warning("Motion detection state is invalid; using configured default")
-        return self.settings.motion_enabled
+        LOGGER.warning("Motion detection state is invalid; disabling motion detection")
+        return False
 
     def _save_motion_enabled(self, enabled: bool) -> None:
         path = self.settings.motion_state_path

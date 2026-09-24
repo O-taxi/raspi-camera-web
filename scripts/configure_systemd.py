@@ -2,7 +2,7 @@
 """実機固有のsystemd unitとアプリ設定を生成する。
 
 使い方:
-    uv run python scripts/configure_systemd.py [OPTIONS]
+    uv run --no-sync python scripts/configure_systemd.py [OPTIONS]
 
 主要引数:
     --dry-run                    生成内容だけを表示して書き込まない。
@@ -16,9 +16,10 @@
     --motion-analysis-tile-size N 検知する小領域の一辺を指定する。
     --motion-settle-seconds N    照明変化後の検知待機秒数を指定する。
     --[no-]motion-enabled        動体検知の既定の有効状態を指定する。
-    --force                      既存のunitと環境ファイルを上書きする。
+    --force                      既存のunitを上書きする。
+    --reset-settings             --forceと併用して環境ファイルを既定値から再生成する。
 
-全引数は `uv run python scripts/configure_systemd.py --help` で確認する。
+全引数は `uv run --no-sync python scripts/configure_systemd.py --help` で確認する。
 """
 
 from __future__ import annotations
@@ -92,6 +93,8 @@ def build_environment(args: argparse.Namespace, photo_dir: Path, video_dir: Path
         ("MAXIMUM_PHOTOS", args.maximum_photos),
         ("CAMERA_CAPTURE_DELAY_MS", args.camera_capture_delay_ms),
         ("MAXIMUM_VIDEOS", args.maximum_videos),
+        ("MAXIMUM_VIDEO_BYTES", args.maximum_video_bytes),
+        ("MINIMUM_FREE_DISK_BYTES", args.minimum_free_disk_bytes),
         ("VIDEO_WIDTH", args.video_width),
         ("VIDEO_HEIGHT", args.video_height),
         ("VIDEO_FPS", args.video_fps),
@@ -150,6 +153,20 @@ def _privileged_command(*command: str) -> tuple[str, ...]:
     return ("sudo", *command)
 
 
+def validate_overwrite(
+    unit_path: Path, env_path: Path, *, force: bool, reset_settings: bool
+) -> None:
+    existing = [path for path in (unit_path, env_path) if path.exists()]
+    if existing and not force:
+        raise FileExistsError("設定ファイルは既に存在します。上書きには --force が必要です")
+    if env_path.exists() and not reset_settings:
+        raise FileExistsError(
+            "環境ファイルの再生成には --force --reset-settings が必要です。"
+            "未指定の項目は既定値に戻ります。既存設定をバックアップし、"
+            "--dry-run の出力を確認してください。通常の設定変更には sudoedit を使えます。"
+        )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="実機固有のsystemd unitと/etc/raspi-camera-web.envを生成します。"
@@ -190,6 +207,8 @@ def _parse_args() -> argparse.Namespace:
         help="動画保存先（既定: <project-dir>/data/videos）",
     )
     parser.add_argument("--maximum-videos", type=_positive_int, default=20)
+    parser.add_argument("--maximum-video-bytes", type=_positive_int, default=500_000_000)
+    parser.add_argument("--minimum-free-disk-bytes", type=_positive_int, default=100_000_000)
     parser.add_argument("--video-width", type=_positive_int, default=1280)
     parser.add_argument("--video-height", type=_positive_int, default=720)
     parser.add_argument("--video-fps", type=_positive_int, default=15)
@@ -223,6 +242,10 @@ def _parse_args() -> argparse.Namespace:
         help="uv実行ファイルの絶対パス（既定: PATHから検出）",
     )
     parser.add_argument("--force", action="store_true", help="既存の設定ファイルを上書きする")
+    parser.add_argument(
+        "--reset-settings", action="store_true",
+        help="既存環境を再生成する。未指定項目は既定値へ戻る（--force と併用）",
+    )
     parser.add_argument(
         "--enable-now",
         action="store_true",
@@ -293,13 +316,9 @@ def main() -> int:
         print(f"--- {args.env_path} ---\n{environment}", end="")
         return 0
     try:
-        if not args.force:
-            existing_paths = [path for path in (args.unit_path, args.env_path) if path.exists()]
-            if existing_paths:
-                paths = ", ".join(str(path) for path in existing_paths)
-                raise FileExistsError(
-                    f"{paths} は既に存在します。上書きするには --force が必要です"
-                )
+        validate_overwrite(
+            args.unit_path, args.env_path, force=args.force, reset_settings=args.reset_settings
+        )
         with tempfile.TemporaryDirectory(prefix="raspi-camera-web-config-") as directory:
             temporary_directory = Path(directory)
             temporary_env = temporary_directory / args.env_path.name

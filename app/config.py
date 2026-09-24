@@ -108,6 +108,8 @@ class Settings:
     motion_cooldown_seconds: int = 30
     motion_enabled: bool = True
     motion_state_path: Path = PROJECT_ROOT / "data" / "videos" / ".motion-state.json"
+    maximum_video_bytes: int = 500_000_000
+    minimum_free_disk_bytes: int = 100_000_000
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -135,6 +137,8 @@ class Settings:
             camera_capture_delay_ms=_positive_int("CAMERA_CAPTURE_DELAY_MS", 1000),
             video_dir=video_dir,
             maximum_videos=_positive_int("MAXIMUM_VIDEOS", 20),
+            maximum_video_bytes=_positive_int("MAXIMUM_VIDEO_BYTES", 500_000_000),
+            minimum_free_disk_bytes=_positive_int("MINIMUM_FREE_DISK_BYTES", 100_000_000),
             video_width=_positive_int("VIDEO_WIDTH", 1280),
             video_height=_positive_int("VIDEO_HEIGHT", 720),
             video_fps=_positive_int("VIDEO_FPS", 15),

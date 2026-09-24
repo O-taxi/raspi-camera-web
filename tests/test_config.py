@@ -56,3 +56,14 @@ def test_motion_configuration_reads_boolean_and_validates_recording_limit(monkey
     monkeypatch.setenv("MOTION_MAX_RECORD_SECONDS", "20")
     with pytest.raises(ValueError, match="MOTION_MAX_RECORD_SECONDS"):
         Settings.from_environment()
+
+
+def test_video_storage_limits_are_positive(monkeypatch) -> None:
+    monkeypatch.setenv("MAXIMUM_VIDEO_BYTES", "1000000")
+    monkeypatch.setenv("MINIMUM_FREE_DISK_BYTES", "500000")
+    settings = Settings.from_environment()
+    assert settings.maximum_video_bytes == 1_000_000
+    assert settings.minimum_free_disk_bytes == 500_000
+    monkeypatch.setenv("MAXIMUM_VIDEO_BYTES", "0")
+    with pytest.raises(ValueError, match="MAXIMUM_VIDEO_BYTES"):
+        Settings.from_environment()

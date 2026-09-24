@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,10 @@ from threading import RLock
 from uuid import uuid4
 
 VIDEO_ID_PATTERN = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$")
+
+
+class VideoStorageFullError(OSError):
+    """Raised when another recording cannot fit within the storage limits."""
 
 
 @dataclass(frozen=True)
@@ -20,9 +25,17 @@ class Video:
 
 
 class VideoStore:
-    def __init__(self, directory: Path, maximum_videos: int) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        maximum_videos: int,
+        maximum_bytes: int = 500_000_000,
+        minimum_free_bytes: int = 100_000_000,
+    ) -> None:
         self.directory = directory
         self.maximum_videos = maximum_videos
+        self.maximum_bytes = maximum_bytes
+        self.minimum_free_bytes = minimum_free_bytes
         self.directory.mkdir(parents=True, exist_ok=True)
         self.metadata_path = self.directory / ".video-metadata.json"
         self._lock = RLock()
@@ -79,13 +92,66 @@ class VideoStore:
             return True
 
     def remove_excess(self) -> None:
+        self._prune(enforce_free=True)
+
+    def recover(self) -> None:
+        """Run before opening the sole camera owner, never during a recording."""
+        with self._lock:
+            for path in self.directory.glob("*.part.mp4"):
+                if (
+                    VIDEO_ID_PATTERN.fullmatch(path.name.removesuffix(".part.mp4"))
+                    and (path.is_file() or path.is_symlink())
+                ):
+                    path.unlink(missing_ok=True)
+            self._prune()
+
+    def prepare_recording(self, expected_bytes: int) -> None:
+        """Reserve approximate space, retaining the newest completed videos."""
+        with self._lock:
+            if expected_bytes > self.maximum_bytes:
+                raise VideoStorageFullError("Recording exceeds the video storage budget")
+            free = shutil.disk_usage(self.directory).free
+            reclaimable = sum(
+                self.path_for_new_video(video.id).stat().st_size for video in self.list_videos()
+            )
+            if free + reclaimable < self.minimum_free_bytes + expected_bytes:
+                raise VideoStorageFullError("Insufficient free space for recording")
+            self._prune(reserve_bytes=expected_bytes, enforce_free=True)
+            if shutil.disk_usage(self.directory).free < self.minimum_free_bytes + expected_bytes:
+                raise VideoStorageFullError("Insufficient free space for recording")
+
+    def has_recording_space(self, temporary_path: Path) -> bool:
+        with self._lock:
+            paths = [self.path_for_new_video(video.id) for video in self.list_videos()]
+            if temporary_path.is_file():
+                paths.append(temporary_path)
+            return (
+                sum(path.stat().st_size for path in paths) < self.maximum_bytes
+                and shutil.disk_usage(self.directory).free > self.minimum_free_bytes
+            )
+
+    def _prune(self, reserve_bytes: int = 0, *, enforce_free: bool = False) -> None:
         with self._lock:
             durations = self._load_durations()
             changed = False
-            for video in self.list_videos()[self.maximum_videos :]:
-                path = self.resolve(video.id)
-                if path is not None:
-                    path.unlink(missing_ok=True)
+            videos = self.list_videos()
+            total_bytes = sum(self.path_for_new_video(video.id).stat().st_size for video in videos)
+            # Keep existing recordings until a new one is finalized; a failed start
+            # must not evict the oldest file merely to reserve a count slot.
+            count_limit = self.maximum_videos
+            while videos and (
+                len(videos) > count_limit
+                or total_bytes + reserve_bytes > self.maximum_bytes
+                or (
+                    enforce_free
+                    and shutil.disk_usage(self.directory).free
+                    < self.minimum_free_bytes + reserve_bytes
+                )
+            ):
+                video = videos.pop()
+                path = self.path_for_new_video(video.id)
+                total_bytes -= path.stat().st_size
+                path.unlink(missing_ok=True)
                 if video.id in durations:
                     del durations[video.id]
                     changed = True

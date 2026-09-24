@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -44,6 +45,10 @@ class VideoResponse(BaseModel):
 
 class MotionStatusResponse(BaseModel):
     enabled: bool
+    state: Literal["disabled", "waiting", "recording", "cooldown", "error"]
+    stream_state: Literal["starting", "streaming", "stale"]
+    last_frame_at: str | None
+    error: str | None
 
 
 class MotionSettingsRequest(BaseModel):
@@ -59,7 +64,12 @@ def create_app(
     video_store: VideoStore | None = None
     video_service: Picamera2Service | None = None
     if active_settings.camera_backend == "picamera2":
-        video_store = VideoStore(active_settings.video_dir, active_settings.maximum_videos)
+        video_store = VideoStore(
+            active_settings.video_dir,
+            active_settings.maximum_videos,
+            active_settings.maximum_video_bytes,
+            active_settings.minimum_free_disk_bytes,
+        )
         video_service = Picamera2Service(active_settings, video_store)
     camera = camera_service or CameraService(
         active_settings,
@@ -169,7 +179,7 @@ def create_app(
     async def motion_status() -> MotionStatusResponse:
         if video_service is None:
             raise HTTPException(status_code=404, detail="Motion detection is not available")
-        return MotionStatusResponse(enabled=video_service.motion_enabled)
+        return MotionStatusResponse(**video_service.status())
 
     @application.put(
         "/api/motion",
@@ -184,10 +194,10 @@ def create_app(
         if video_service is None:
             raise HTTPException(status_code=404, detail="Motion detection is not available")
         try:
-            enabled = await video_service.set_motion_enabled(settings.enabled)
-        except OSError as exc:
+            await video_service.set_motion_enabled(settings.enabled)
+        except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=503, detail="Motion detection update failed") from exc
-        return MotionStatusResponse(enabled=enabled)
+        return MotionStatusResponse(**video_service.status())
 
     @application.get("/api/videos", response_model=list[VideoResponse])
     async def videos() -> list[VideoResponse]:
