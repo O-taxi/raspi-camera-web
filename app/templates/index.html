@@ -17,20 +17,9 @@
       <section class="live-view" aria-labelledby="live-view-title">
         <div class="section-heading live-heading">
           <h2 id="live-view-title">ライブ映像</h2>
-          <div class="live-controls">
-            <span id="live-indicator" class="live-indicator" aria-live="polite">接続待ち</span>
-            <button id="motion-toggle" class="secondary-button motion-toggle" type="button" disabled>
-              動体検知を読み込み中…
-            </button>
-          </div>
+          <button id="motion-toggle" class="secondary-button motion-toggle" type="button" hidden disabled>動体検知</button>
         </div>
-        <p id="stream-status" class="stream-status" role="status" aria-live="polite">映像の状態を確認しています。</p>
-        <div class="motion-status" aria-live="polite">
-          <span>動体検知: <strong id="motion-state">状態を確認しています</strong></span>
-          <span id="last-frame-time">最終フレーム: 未受信</span>
-          <span id="motion-error" class="motion-error" hidden></span>
-        </div>
-        <p class="motion-warning">動体検知を停止すると、録画中の動画は保存されず破棄されます。</p>
+        <p id="camera-notice" class="camera-notice" role="status" aria-live="polite" hidden></p>
         <img id="live-stream" src="/stream.mjpg" alt="カメラのライブ映像">
       </section>
       {% endif %}

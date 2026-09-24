@@ -20,11 +20,7 @@ const previousVideoPageButton = document.querySelector("#previous-video-page");
 const nextVideoPageButton = document.querySelector("#next-video-page");
 const videoPageInfo = document.querySelector("#video-page-info");
 const motionToggle = document.querySelector("#motion-toggle");
-const liveIndicator = document.querySelector("#live-indicator");
-const streamStatus = document.querySelector("#stream-status");
-const motionStateLabel = document.querySelector("#motion-state");
-const lastFrameTime = document.querySelector("#last-frame-time");
-const motionError = document.querySelector("#motion-error");
+const cameraNotice = document.querySelector("#camera-notice");
 
 const photosPerPage = 8;
 const videosPerPage = 10;
@@ -251,25 +247,11 @@ async function deleteVideo(video, deleteButton) {
   }
 }
 
-const motionStateLabels = {
-  disabled: "停止中",
-  waiting: "検知待機中",
-  recording: "録画中",
-  cooldown: "次の検知まで待機中",
-  error: "エラー",
-};
-
-const streamStateLabels = {
-  starting: "カメラ映像の起動中",
-  streaming: "ライブ映像を受信中",
-  stale: "映像の更新が止まっています",
-};
-
 const publicErrorMessages = {
   "Video storage is full": "動画の保存容量が上限に達しました。",
   "Recording failed": "動画の録画に失敗しました。",
   "Recording stop failed": "録画を停止できませんでした。",
-  "Live frame unavailable": "ライブ映像のフレームを受信できません。",
+  "Live frame unavailable": "映像を表示できません。カメラの接続を確認してください。",
 };
 
 function publicErrorMessage(message) {
@@ -278,62 +260,39 @@ function publicErrorMessage(message) {
 
 function renderMotionStatus(payload) {
   motionStatus = payload;
-  if (liveIndicator !== null) {
-    const label = streamStateLabels[payload.stream_state] || "映像の状態は不明です";
-    liveIndicator.textContent = payload.stream_state === "streaming" ? "LIVE" : "確認中";
-    liveIndicator.classList.toggle("is-live", payload.stream_state === "streaming");
-    liveIndicator.classList.toggle("is-stale", payload.stream_state === "stale");
-    liveIndicator.setAttribute("aria-label", label);
-  }
-  if (streamStatus !== null) {
-    streamStatus.textContent = streamStateLabels[payload.stream_state] || "映像の状態は不明です";
-    streamStatus.classList.toggle("error", payload.stream_state === "stale");
-  }
-  if (motionStateLabel !== null) {
-    motionStateLabel.textContent = motionStateLabels[payload.state] || "状態不明";
-  }
-  if (lastFrameTime !== null) {
-    lastFrameTime.textContent = payload.last_frame_at
-      ? `最終フレーム: ${formatDate(payload.last_frame_at)}`
-      : "最終フレーム: 未受信";
-  }
-  if (motionError !== null) {
-    motionError.textContent = payload.error ? publicErrorMessage(payload.error) : "";
-    motionError.hidden = !payload.error;
+  if (cameraNotice !== null) {
+    const isError = Boolean(payload.error) || payload.stream_state === "stale" || payload.state === "error";
+    let message = "";
+    if (payload.error) {
+      message = publicErrorMessage(payload.error);
+    } else if (payload.stream_state === "stale") {
+      message = "映像が更新されていません。";
+    } else if (payload.state === "error") {
+      message = "動体検知でエラーが発生しました。";
+    } else if (payload.state === "recording") {
+      message = "録画中";
+    }
+    cameraNotice.textContent = message;
+    cameraNotice.classList.toggle("error", isError);
+    cameraNotice.hidden = cameraNotice.textContent === "";
   }
 
   if (motionToggle !== null) {
+    motionToggle.hidden = false;
     motionToggle.disabled = motionUpdateInProgress;
     motionToggle.classList.toggle("enabled", payload.enabled);
-    motionToggle.setAttribute("aria-pressed", String(payload.enabled));
     motionToggle.textContent = payload.enabled ? "動体検知を停止" : "動体検知を開始";
   }
 }
 
 function showMotionConnectionError() {
-  if (liveIndicator !== null) {
-    liveIndicator.textContent = "接続エラー";
-    liveIndicator.classList.remove("is-live");
-    liveIndicator.classList.add("is-stale");
-    liveIndicator.setAttribute("aria-label", "カメラ状態を取得できません");
-  }
-  if (streamStatus !== null) {
-    streamStatus.textContent = "カメラ状態を取得できません。接続を確認しています。";
-    streamStatus.classList.add("error");
-  }
-  if (motionStateLabel !== null) {
-    motionStateLabel.textContent = "接続エラー";
-  }
-  if (lastFrameTime !== null) {
-    lastFrameTime.textContent = "最終フレーム: 状態を取得できません";
-  }
-  if (motionError !== null) {
-    motionError.textContent = "動体検知の状態に接続できません。再接続しています。";
-    motionError.hidden = false;
+  if (cameraNotice !== null) {
+    cameraNotice.textContent = "カメラの状態を取得できません。";
+    cameraNotice.classList.add("error");
+    cameraNotice.hidden = false;
   }
   if (motionToggle !== null) {
     motionToggle.disabled = true;
-    motionToggle.textContent = "接続を確認しています…";
   }
 }
 
