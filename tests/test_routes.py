@@ -289,6 +289,33 @@ async def test_motion_detection_can_be_remotely_disabled(settings, tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_motion_api_exposes_analysis_and_recording_trigger(settings, tmp_path: Path) -> None:
+    application = create_app(replace(
+        settings, camera_backend="picamera2", video_dir=tmp_path / "videos",
+        live_stream_width=64, live_stream_height=64, motion_minimum_consecutive_frames=1,
+    ))
+    service = application.state.video_service
+    service._previous_luma = bytes([80]) * 4096
+    current = bytearray(service._previous_luma)
+    for y in range(16):
+        current[y * 64:y * 64 + 16] = bytes([110]) * 16
+    assert service._detect_motion(bytes(current))
+    service._last_recording_trigger = service._motion_analysis
+    service._detect_motion(bytes(current))
+
+    response = await asgi_request(application, "GET", "/api/motion")
+    assert response.status_code == 200
+    status = response.json()
+    assert status["analysis"]["reason"] == "still"
+    trigger = status["last_recording_trigger"]
+    assert trigger["reason"] == "motion"
+    assert trigger["threshold"] == 12
+    assert trigger["tiles"] == [
+        {"x": 0, "y": 0, "changed_ratio": 0.25, "confirmed": True}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_motion_stop_failure_returns_private_json_error(settings, tmp_path, monkeypatch):
     application = create_app(replace(
         settings, camera_backend="picamera2", video_dir=tmp_path / "videos",

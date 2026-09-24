@@ -20,7 +20,20 @@
           <button id="motion-toggle" class="secondary-button motion-toggle" type="button" disabled>動体検知</button>
         </div>
         <p id="camera-notice" class="camera-notice" role="status" aria-live="polite" hidden></p>
-        <img id="live-stream" src="/stream.mjpg" alt="カメラのライブ映像">
+        <div class="live-image-wrap">
+          <img id="live-stream" src="/stream.mjpg" alt="カメラのライブ映像">
+          <svg id="motion-overlay" aria-hidden="true" hidden></svg>
+        </div>
+        <details id="motion-diagnostics" class="motion-diagnostics">
+          <summary>検知箇所・判定理由を確認</summary>
+          <label for="motion-analysis-source">表示する判定</label>
+          <select id="motion-analysis-source">
+            <option value="current">現在の判定</option>
+            <option value="trigger">直近の録画開始時</option>
+          </select>
+          <p>黄色は動きの候補、赤色は連続して検知した領域です。枠は約1秒ごとに更新し、ライブ映像とは時間差があります。録画開始時の枠も現在の映像に重ねます。</p>
+          <p id="motion-analysis-status">判定を待っています。</p>
+        </details>
       </section>
       {% endif %}
 

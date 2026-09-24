@@ -21,6 +21,10 @@ const nextVideoPageButton = document.querySelector("#next-video-page");
 const videoPageInfo = document.querySelector("#video-page-info");
 const motionToggle = document.querySelector("#motion-toggle");
 const cameraNotice = document.querySelector("#camera-notice");
+const motionDiagnostics = document.querySelector("#motion-diagnostics");
+const motionAnalysisSource = document.querySelector("#motion-analysis-source");
+const motionAnalysisStatus = document.querySelector("#motion-analysis-status");
+const motionOverlay = document.querySelector("#motion-overlay");
 
 const photosPerPage = 8;
 const videosPerPage = 10;
@@ -260,6 +264,7 @@ function publicErrorMessage(message) {
 
 function renderMotionStatus(payload) {
   motionStatus = payload;
+  renderMotionAnalysis(payload);
   if (cameraNotice !== null) {
     const isError = Boolean(payload.error) || payload.stream_state === "stale" || payload.state === "error";
     let message = "";
@@ -284,7 +289,56 @@ function renderMotionStatus(payload) {
   }
 }
 
+function renderMotionAnalysis(payload) {
+  if (motionDiagnostics === null || motionOverlay === null) return;
+  motionOverlay.replaceChildren();
+  motionOverlay.hidden = !motionDiagnostics.open;
+  if (!motionDiagnostics.open) return;
+  const historical = motionAnalysisSource.value === "trigger";
+  const analysis = historical ? payload.last_recording_trigger : payload.analysis;
+  if (!historical && (payload.stream_state === "stale" || payload.state === "error")) {
+    motionAnalysisStatus.textContent = "カメラの状態を確認できないため、現在の判定を表示できません。";
+    return;
+  }
+  if (!analysis) {
+    motionAnalysisStatus.textContent = historical
+      ? "この起動中の録画開始記録はありません。"
+      : (payload.enabled ? "初期化・最初の判定を待っています。" : "動体検知は停止しています。");
+    return;
+  }
+  const reasons = {
+    illumination: "画面全体の明るさ変化として除外",
+    settling: "露出が落ち着くまで待機",
+    still: "動きなし",
+    candidate: "動きの候補（連続回数を確認中）",
+    motion: "動きを検知",
+  };
+  const percent = (value) => `${(value * 100).toFixed(1)}%`;
+  motionAnalysisStatus.textContent = `${formatDate(analysis.at)}：${reasons[analysis.reason]}。`
+    + ` 最大領域変化 ${percent(analysis.largest_tile_changed_ratio)}`
+    + ` / 判定基準 ${percent(analysis.min_changed_ratio)}、`
+    + `連続 ${analysis.consecutive_frames}/${analysis.required_frames} 回。`
+    + ` 明るさ補正 ${analysis.brightness_shift}、画素差の閾値 ${analysis.threshold}、`
+    + `補正前の全体変化 ${percent(analysis.raw_changed_ratio)}。`;
+  motionOverlay.setAttribute("viewBox", `0 0 ${analysis.width} ${analysis.height}`);
+  for (const tile of analysis.tiles) {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", tile.x);
+    rect.setAttribute("y", tile.y);
+    rect.setAttribute("width", Math.min(analysis.tile_size, analysis.width - tile.x));
+    rect.setAttribute("height", Math.min(analysis.tile_size, analysis.height - tile.y));
+    rect.setAttribute("fill", tile.confirmed ? "#ff404033" : "#ffd54f22");
+    rect.setAttribute("stroke", tile.confirmed ? "#ff4040" : "#ffd54f");
+    rect.setAttribute("stroke-width", "2");
+    motionOverlay.append(rect);
+  }
+}
+
 function showMotionConnectionError() {
+  if (motionOverlay !== null) motionOverlay.replaceChildren();
+  if (motionAnalysisStatus !== null) {
+    motionAnalysisStatus.textContent = "判定情報を取得できません。";
+  }
   if (cameraNotice !== null) {
     cameraNotice.textContent = "カメラの状態を取得できません。";
     cameraNotice.classList.add("error");
@@ -474,6 +528,13 @@ closeDialogButton.addEventListener("click", () => photoDialog.close());
 deletePhotoButton.addEventListener("click", deleteSelectedPhoto);
 if (motionToggle !== null) {
   motionToggle.addEventListener("click", toggleMotionDetection);
+  motionDiagnostics.addEventListener("toggle", () => {
+    if (motionStatus !== null) renderMotionAnalysis(motionStatus);
+    if (motionDiagnostics.open) loadMotionStatus();
+  });
+  motionAnalysisSource.addEventListener("change", () => {
+    if (motionStatus !== null) renderMotionAnalysis(motionStatus);
+  });
 }
 photoDialog.addEventListener("close", () => {
   selectedPhoto = null;
@@ -492,11 +553,13 @@ if (document.visibilityState === "visible") {
   loadMotionStatus();
 }
 if (motionToggle !== null) {
+  let statusTicks = 0;
   window.setInterval(() => {
-    if (document.visibilityState === "visible") {
+    statusTicks += 1;
+    if (document.visibilityState === "visible" && (motionDiagnostics.open || statusTicks % 3 === 0)) {
       loadMotionStatus();
     }
-  }, 3000);
+  }, 1000);
 }
 if (videoList !== null) {
   window.setInterval(loadVideos, 10_000);

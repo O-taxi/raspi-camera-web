@@ -46,6 +46,9 @@ class Picamera2Service:
         self._monitor_task: asyncio.Task[None] | None = None
         self._previous_luma: bytes | None = None
         self._motion_frames = 0
+        self._tile_motion_frames: dict[tuple[int, int], int] = {}
+        self._motion_analysis: dict[str, Any] | None = None
+        self._last_recording_trigger: dict[str, Any] | None = None
         self._recording: _Recording | None = None
         self._recording_encoder: Any | None = None
         self._recording_output: Any | None = None
@@ -132,6 +135,8 @@ class Picamera2Service:
             "stream_state": stream_state,
             "last_frame_at": self._last_frame_at,
             "error": error,
+            "analysis": self._motion_analysis if self._motion_enabled else None,
+            "last_recording_trigger": self._last_recording_trigger,
         }
 
     async def _run_control(self, operation: Callable[..., Any], *args: Any) -> Any:
@@ -151,6 +156,8 @@ class Picamera2Service:
             self._motion_enabled = enabled
             self._previous_luma = None
             self._motion_frames = 0
+            self._tile_motion_frames = {}
+            self._motion_analysis = None
             self._motion_settling_until = 0.0
             if not enabled and self._recording is not None:
                 try:
@@ -326,59 +333,124 @@ class Picamera2Service:
     def _detect_motion(self, current_luma: bytes) -> bool:
         previous_luma = self._previous_luma
         self._previous_luma = current_luma
-        if previous_luma is None:
+        now = time.monotonic()
+        if previous_luma is None or len(previous_luma) != len(current_luma):
+            self._motion_frames = 0
+            self._tile_motion_frames = {}
+            self._motion_analysis = None
+            self._motion_settling_until = now + self.settings.motion_settle_seconds
             return False
 
-        changed_pixels = 0
-        brightened_pixels = 0
-        darkened_pixels = 0
-        sample_count = 0
-        tile_sample_counts: dict[tuple[int, int], int] = {}
-        tile_changed_counts: dict[tuple[int, int], int] = {}
+        # Sample both axes. At 640x360 this is 14,400 samples, with no extra
+        # camera capture, image encoding, NumPy dependency, or disk writes.
         width = self.settings.live_stream_width
         tile_size = self.settings.motion_analysis_tile_size
-        for index in range(0, len(current_luma), MOTION_SAMPLE_STRIDE):
-            difference = current_luma[index] - previous_luma[index]
-            sample_count += 1
-            tile = ((index % width) // tile_size, (index // width) // tile_size)
-            tile_sample_counts[tile] = tile_sample_counts.get(tile, 0) + 1
-            if abs(difference) < self.settings.motion_threshold:
-                continue
-            changed_pixels += 1
-            tile_changed_counts[tile] = tile_changed_counts.get(tile, 0) + 1
-            if difference > 0:
-                brightened_pixels += 1
-            else:
-                darkened_pixels += 1
-
-        if changed_pixels == 0:
+        differences: list[tuple[int, int, int]] = []
+        histogram = [0] * 511
+        brightened_pixels = 0
+        darkened_pixels = 0
+        for y in range(0, len(current_luma) // width, MOTION_SAMPLE_STRIDE):
+            for x in range(0, width, MOTION_SAMPLE_STRIDE):
+                index = y * width + x
+                difference = current_luma[index] - previous_luma[index]
+                differences.append((x, y, difference))
+                histogram[difference + 255] += 1
+                if difference >= self.settings.motion_threshold:
+                    brightened_pixels += 1
+                elif difference <= -self.settings.motion_threshold:
+                    darkened_pixels += 1
+        sample_count = len(differences)
+        if not sample_count:
             self._motion_frames = 0
+            self._tile_motion_frames = {}
+            self._motion_analysis = None
             return False
 
+        # A median shift models exposure/flicker without letting a small moving
+        # object change the background estimate. Use raw differences for the
+        # existing large illumination-change guard.
+        cumulative = 0
+        brightness_shift = 0
+        for index, count in enumerate(histogram):
+            cumulative += count
+            if cumulative > sample_count // 2:
+                brightness_shift = index - 255
+                break
+        changed_pixels = brightened_pixels + darkened_pixels
         changed_ratio = changed_pixels / sample_count
-        directional_ratio = max(brightened_pixels, darkened_pixels) / changed_pixels
-        now = time.monotonic()
+        directional_ratio = (
+            max(brightened_pixels, darkened_pixels) / changed_pixels if changed_pixels else 0.0
+        )
+        tile_sample_counts: dict[tuple[int, int], int] = {}
+        tile_changed_counts: dict[tuple[int, int], int] = {}
+        for x, y, difference in differences:
+            tile = (x // tile_size, y // tile_size)
+            tile_sample_counts[tile] = tile_sample_counts.get(tile, 0) + 1
+            # Compensation only suppresses candidates; it must not turn two
+            # opposite sub-threshold flickers into a new motion candidate.
+            if (
+                abs(difference) >= self.settings.motion_threshold
+                and abs(difference - brightness_shift) >= self.settings.motion_threshold
+            ):
+                tile_changed_counts[tile] = tile_changed_counts.get(tile, 0) + 1
+
+        ratios = {
+            tile: count / tile_sample_counts[tile] for tile, count in tile_changed_counts.items()
+        }
+        candidates = {
+            tile: ratio for tile, ratio in ratios.items()
+            if ratio >= self.settings.motion_min_changed_ratio
+        }
         if (
             changed_ratio >= self.settings.motion_illumination_changed_ratio
             and directional_ratio >= self.settings.motion_illumination_direction_ratio
         ):
-            self._motion_frames = 0
             self._motion_settling_until = now + self.settings.motion_settle_seconds
-            return False
-
-        if now < self._motion_settling_until:
-            self._motion_frames = 0
-            return False
-
-        largest_tile_changed_ratio = max(
-            changed_count / tile_sample_counts[tile]
-            for tile, changed_count in tile_changed_counts.items()
-        )
-        if largest_tile_changed_ratio >= self.settings.motion_min_changed_ratio:
-            self._motion_frames += 1
+            reason = "illumination"
+        elif now < self._motion_settling_until:
+            reason = "settling"
         else:
-            self._motion_frames = 0
-        return self._motion_frames >= self.settings.motion_minimum_consecutive_frames
+            reason = "candidate" if candidates else "still"
+
+        self._tile_motion_frames = (
+            {
+                tile: min(
+                    self._tile_motion_frames.get(tile, 0) + 1,
+                    self.settings.motion_minimum_consecutive_frames,
+                )
+                for tile in candidates
+            }
+            if reason == "candidate" else {}
+        )
+        self._motion_frames = max(self._tile_motion_frames.values(), default=0)
+        detected = self._motion_frames >= self.settings.motion_minimum_consecutive_frames
+        if detected:
+            reason = "motion"
+        self._motion_analysis = {
+            "at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "width": width,
+            "height": self.settings.live_stream_height,
+            "tile_size": tile_size,
+            "reason": reason,
+            "brightness_shift": brightness_shift,
+            "raw_changed_ratio": changed_ratio,
+            "largest_tile_changed_ratio": max(ratios.values(), default=0.0),
+            "threshold": self.settings.motion_threshold,
+            "min_changed_ratio": self.settings.motion_min_changed_ratio,
+            "consecutive_frames": self._motion_frames,
+            "required_frames": self.settings.motion_minimum_consecutive_frames,
+            "tiles": [
+                {
+                    "x": tile[0] * tile_size,
+                    "y": tile[1] * tile_size,
+                    "changed_ratio": ratio,
+                    "confirmed": self._tile_motion_frames.get(tile, 0)
+                    >= self.settings.motion_minimum_consecutive_frames,
+                }
+                for tile, ratio in candidates.items()
+            ],
+        }
+        return detected
 
     async def _update_recording(self, motion_detected: bool) -> None:
         async with self._control_lock:
@@ -413,7 +485,15 @@ class Picamera2Service:
             motion_detected
             and now - self._last_recording_finished_at >= self.settings.motion_cooldown_seconds
         ):
+            trigger = self._motion_analysis
             await self._run_control(self._start_recording, now)
+            self._last_recording_trigger = trigger
+            if trigger is not None:
+                LOGGER.info(
+                    "Motion recording started: changed_tile=%.3f brightness_shift=%s frames=%s",
+                    trigger["largest_tile_changed_ratio"], trigger["brightness_shift"],
+                    trigger["consecutive_frames"],
+                )
             self._recording_error = None
 
     def _start_recording(self, now: float) -> None:

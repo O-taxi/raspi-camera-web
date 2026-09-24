@@ -75,11 +75,29 @@ description: raspi-camera-webの機能、HTTP API、設定、保存データの�
   "state": "waiting",
   "stream_state": "streaming",
   "last_frame_at": "2026-09-25T03:00:00+00:00",
-  "error": null
+  "error": null,
+  "analysis": null,
+  "last_recording_trigger": null
 }
 ```
 
 `state`は`disabled`（検知停止中）、`waiting`（検知待機中）、`recording`（録画中）、`cooldown`（録画後の待機中）、`error`（検知または録画のエラー）です。`stream_state`は`starting`（初期化中）、`streaming`（フレーム受信中）、`stale`（フレーム更新が止まっている）です。`last_frame_at`は最終フレーム時刻をUTCのISO 8601文字列で示し、まだフレームがなければ`null`です。`error`は画面に表示できる短いメッセージまたは`null`です。
+
+`analysis`は最新の判定で、検知OFF・最初の比較前は`null`です。`last_recording_trigger`はこの起動中に最後に録画を開始した判定（未開始なら`null`）で、OFFにしても保持します。両方とも次の形式です。画像は含めず、メモリ上に最新の各1件だけ保持します。
+
+| フィールド | 内容 |
+| --- | --- |
+| `at` | 判定時刻、UTC ISO 8601 |
+| `width`, `height`, `tile_size` | 解析映像の幅・高さ・領域サイズ（ピクセル） |
+| `reason` | `still`、`candidate`、`motion`、`illumination`、`settling` |
+| `brightness_shift` | フレーム間の輝度差の中央値（補正量） |
+| `raw_changed_ratio` | 補正前に画素差の閾値を超えた全体の割合 |
+| `largest_tile_changed_ratio` | 補正後の変化割合が最も大きい領域の割合 |
+| `threshold`, `min_changed_ratio` | 実際の画素差の閾値・領域変化割合の基準 |
+| `consecutive_frames`, `required_frames` | 同じ領域の最大連続回数（必要回数で上限）・検知に必要な回数 |
+| `tiles` | 変化割合が基準以上の領域。各要素は左上の`x`, `y`、`changed_ratio`、連続条件を満たしたかを表す`confirmed` |
+
+照明変化の除外中・待機中の領域は`confirmed=false`です。APIの判定とMJPEG映像は別の通信であり、時刻同期しません。
 
 ブラウザー要求による副作用操作は、`Sec-Fetch-Site: cross-site`を拒否します。`GET`は読み取り専用です。写真・動画一覧APIは全件のメタデータを返し、画面上のページ切り替えはブラウザー側で行います。Tailscale Serveと同じtailnetのアプリ利用者は、撮影、写真・動画の削除、動体検知の設定変更を行える権限を持ちます。アプリ内ユーザー認証や個人別権限はありません。
 
@@ -120,7 +138,7 @@ description: raspi-camera-webの機能、HTTP API、設定、保存データの�
 | `MOTION_ILLUMINATION_CHANGED_RATIO` | `0.65` | 全体照明変化とみなす変化割合 |
 | `MOTION_ILLUMINATION_DIRECTION_RATIO` | `0.90` | 同じ方向へ変化した画素の割合 |
 | `MOTION_SETTLE_SECONDS` | `5` | 全体照明変化の後に検知を再開するまでの秒数 |
-| `MOTION_MINIMUM_CONSECUTIVE_FRAMES` | `3` | 検知成立に必要な連続フレーム数 |
+| `MOTION_MINIMUM_CONSECUTIVE_FRAMES` | `3` | 同じ小領域で検知成立に必要な連続フレーム数 |
 | `MOTION_RECORD_SECONDS` | `20` | 最後の検知後に録画を続ける秒数 |
 | `MOTION_MIN_RECORD_SECONDS` | `2` | 保存する最小録画時間 |
 | `MOTION_MAX_RECORD_SECONDS` | `60` | 1本の録画の最大時間 |

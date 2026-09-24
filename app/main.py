@@ -43,12 +43,37 @@ class VideoResponse(BaseModel):
     duration_seconds: int | None
 
 
+class MotionTileResponse(BaseModel):
+    x: int
+    y: int
+    changed_ratio: float
+    confirmed: bool
+
+
+class MotionAnalysisResponse(BaseModel):
+    at: str
+    width: int
+    height: int
+    tile_size: int
+    reason: Literal["illumination", "settling", "still", "candidate", "motion"]
+    brightness_shift: int
+    raw_changed_ratio: float
+    largest_tile_changed_ratio: float
+    threshold: float
+    min_changed_ratio: float
+    consecutive_frames: int
+    required_frames: int
+    tiles: list[MotionTileResponse]
+
+
 class MotionStatusResponse(BaseModel):
     enabled: bool
     state: Literal["disabled", "waiting", "recording", "cooldown", "error"]
     stream_state: Literal["starting", "streaming", "stale"]
     last_frame_at: str | None
     error: str | None
+    analysis: MotionAnalysisResponse | None = None
+    last_recording_trigger: MotionAnalysisResponse | None = None
 
 
 class MotionSettingsRequest(BaseModel):
