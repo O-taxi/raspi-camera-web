@@ -271,14 +271,16 @@ async def test_recording_stops_at_its_absolute_time_limit(settings, tmp_path: Pa
 def test_global_brightness_change_is_not_motion(settings, tmp_path: Path) -> None:
     motion_settings = replace(
         settings,
+        live_stream_width=64,
+        live_stream_height=64,
         motion_threshold=10.0,
         motion_settle_seconds=5,
     )
     service = Picamera2Service(motion_settings, VideoStore(tmp_path / "videos", 3))
-    service._previous_luma = bytes([10]) * 1_000
+    service._previous_luma = bytes([10]) * (64 * 64)
 
     with patch("app.services.picamera2.time.monotonic", return_value=100.0):
-        detected = service._detect_motion(bytes([100]) * 1_000)
+        detected = service._detect_motion(bytes([100]) * (64 * 64))
 
     assert not detected
     assert service._motion_settling_until == 105.0

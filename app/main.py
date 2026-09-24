@@ -56,8 +56,11 @@ class MotionAnalysisResponse(BaseModel):
     width: int
     height: int
     tile_size: int
-    reason: Literal["illumination", "settling", "still", "candidate", "motion"]
+    reason: Literal["illumination", "settling", "still", "camera_motion", "candidate", "motion"]
     brightness_shift: int
+    camera_shift_x: float
+    camera_shift_y: float
+    camera_shift_support: float
     raw_changed_ratio: float
     largest_tile_changed_ratio: float
     threshold: float

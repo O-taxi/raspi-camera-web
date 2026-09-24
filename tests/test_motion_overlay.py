@@ -16,6 +16,7 @@ SETUP = """
 const sampleAnalysis = {
   at: '2026-09-25T12:17:54Z', width: 640, height: 360, tile_size: 32,
   reason: 'motion', brightness_shift: 0, raw_changed_ratio: 0.053,
+  camera_shift_x: 0, camera_shift_y: 0, camera_shift_support: 0,
   largest_tile_changed_ratio: 0.313, threshold: 12, min_changed_ratio: 0.1,
   consecutive_frames: 2, required_frames: 2,
   tiles: [{x: 320, y: 160, changed_ratio: 0.313, confirmed: true},
@@ -59,6 +60,13 @@ window.addEventListener('load', async () => {
     panel.open = true;
     panel.dispatchEvent(new Event('toggle'));
     check(getComputedStyle(overlay).display !== 'none', 'reopening must show overlay');
+    document.querySelector('#motion-analysis-source').value = 'current';
+    renderMotionStatus({...sampleStatus, analysis: {...sampleAnalysis,
+      reason: 'camera_motion', camera_shift_x: 1.5, camera_shift_y: -0.5,
+      camera_shift_support: 0.75, tiles: []}});
+    check(text.textContent.includes('カメラの揺れを補正'), 'camera motion reason must display');
+    check(text.textContent.includes('横1.5px・縦-0.5px'), 'estimated displacement must display');
+    check(overlay.querySelectorAll('rect').length === 0, 'camera-only motion must clear tiles');
     document.body.dataset.testResult = 'passed';
   } catch (error) {
     document.body.dataset.testResult = error.message;

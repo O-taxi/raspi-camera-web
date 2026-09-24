@@ -89,10 +89,12 @@ description: raspi-camera-webの機能、HTTP API、設定、保存データの�
 | --- | --- |
 | `at` | 判定時刻、UTC ISO 8601 |
 | `width`, `height`, `tile_size` | 解析映像の幅・高さ・領域サイズ（ピクセル） |
-| `reason` | `still`、`candidate`、`motion`、`illumination`、`settling` |
+| `reason` | `still`、`candidate`、`motion`、`camera_motion`（位置補正後に動きなし）、`illumination`、`settling` |
 | `brightness_shift` | フレーム間の輝度差の中央値（補正量） |
-| `raw_changed_ratio` | 補正前に画素差の閾値を超えた全体の割合 |
-| `largest_tile_changed_ratio` | 補正後の変化割合が最も大きい領域の割合 |
+| `camera_shift_x`, `camera_shift_y` | 採用した位置ずれ。低解像度映像上のピクセル単位（0.5刻み、各軸±3以内）。正は映像が右・下に動いたことを示す。未採用は0 |
+| `camera_shift_support` | 位置補正で差が十分に減った領域数 / 12。半数以上の領域で有効な場合だけ補正を採用。未採用は0 |
+| `raw_changed_ratio` | 2×2画素平均後、位置・明るさ補正前に画素差の閾値を超えた全体の割合 |
+| `largest_tile_changed_ratio` | 位置・明るさ補正後の変化割合が最も大きい領域の割合 |
 | `threshold`, `min_changed_ratio` | 実際の画素差の閾値・領域変化割合の基準 |
 | `consecutive_frames`, `required_frames` | 同じ領域の最大連続回数（必要回数で上限）・検知に必要な回数 |
 | `tiles` | 変化割合が基準以上の領域。各要素は左上の`x`, `y`、`changed_ratio`、連続条件を満たしたかを表す`confirmed` |

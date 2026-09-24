@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.config import Settings
+from app.services.motion import ShiftedLuma, estimate_frame_shift, smooth_luma
 from app.services.videos import VideoStorageFullError, VideoStore
 
 LOGGER = logging.getLogger(__name__)
@@ -344,21 +345,37 @@ class Picamera2Service:
         # Sample both axes. At 640x360 this is 14,400 samples, with no extra
         # camera capture, image encoding, NumPy dependency, or disk writes.
         width = self.settings.live_stream_width
+        height = len(current_luma) // width
+        shift = estimate_frame_shift(current_luma, previous_luma, width)
+        sampler = ShiftedLuma(width, shift.x, shift.y)
+        shifted = shift.x != 0 or shift.y != 0
         tile_size = self.settings.motion_analysis_tile_size
         differences: list[tuple[int, int, int]] = []
         histogram = [0] * 511
         brightened_pixels = 0
         darkened_pixels = 0
-        for y in range(0, len(current_luma) // width, MOTION_SAMPLE_STRIDE):
-            for x in range(0, width, MOTION_SAMPLE_STRIDE):
+        raw_sample_count = 0
+        for y in range(0, height - 1, MOTION_SAMPLE_STRIDE):
+            for x in range(0, width - 1, MOTION_SAMPLE_STRIDE):
                 index = y * width + x
-                difference = current_luma[index] - previous_luma[index]
+                value = smooth_luma(current_luma, index, width)
+                raw_difference = value - smooth_luma(previous_luma, index, width)
+                raw_sample_count += 1
+                if raw_difference >= self.settings.motion_threshold:
+                    brightened_pixels += 1
+                elif raw_difference <= -self.settings.motion_threshold:
+                    darkened_pixels += 1
+                if shifted:
+                    # Newly visible image edges have no reference; never compare
+                    # against wrapped rows or pad them with invented dark pixels.
+                    if (x + sampler.left < 0 or x + sampler.right >= width
+                            or y + sampler.top < 0 or y + sampler.bottom >= height):
+                        continue
+                    difference = value - sampler.sample(previous_luma, index)
+                else:
+                    difference = raw_difference
                 differences.append((x, y, difference))
                 histogram[difference + 255] += 1
-                if difference >= self.settings.motion_threshold:
-                    brightened_pixels += 1
-                elif difference <= -self.settings.motion_threshold:
-                    darkened_pixels += 1
         sample_count = len(differences)
         if not sample_count:
             self._motion_frames = 0
@@ -377,7 +394,7 @@ class Picamera2Service:
                 brightness_shift = index - 255
                 break
         changed_pixels = brightened_pixels + darkened_pixels
-        changed_ratio = changed_pixels / sample_count
+        changed_ratio = changed_pixels / raw_sample_count
         directional_ratio = (
             max(brightened_pixels, darkened_pixels) / changed_pixels if changed_pixels else 0.0
         )
@@ -410,7 +427,7 @@ class Picamera2Service:
         elif now < self._motion_settling_until:
             reason = "settling"
         else:
-            reason = "candidate" if candidates else "still"
+            reason = "candidate" if candidates else ("camera_motion" if shifted else "still")
 
         self._tile_motion_frames = (
             {
@@ -433,6 +450,9 @@ class Picamera2Service:
             "tile_size": tile_size,
             "reason": reason,
             "brightness_shift": brightness_shift,
+            "camera_shift_x": shift.x,
+            "camera_shift_y": shift.y,
+            "camera_shift_support": shift.support,
             "raw_changed_ratio": changed_ratio,
             "largest_tile_changed_ratio": max(ratios.values(), default=0.0),
             "threshold": self.settings.motion_threshold,
@@ -490,9 +510,12 @@ class Picamera2Service:
             self._last_recording_trigger = trigger
             if trigger is not None:
                 LOGGER.info(
-                    "Motion recording started: changed_tile=%.3f brightness_shift=%s frames=%s",
+                    "Motion recording started: changed_tile=%.3f brightness_shift=%s frames=%s "
+                    "camera_shift=(%.1f,%.1f) support=%.2f",
                     trigger["largest_tile_changed_ratio"], trigger["brightness_shift"],
                     trigger["consecutive_frames"],
+                    trigger["camera_shift_x"], trigger["camera_shift_y"],
+                    trigger["camera_shift_support"],
                 )
             self._recording_error = None
 

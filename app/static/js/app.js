@@ -315,6 +315,7 @@ function renderMotionAnalysis(payload) {
     illumination: "画面全体の明るさ変化として除外",
     settling: "露出が落ち着くまで待機",
     still: "動きなし",
+    camera_motion: "カメラの揺れを補正（動きなし）",
     candidate: "動きの候補（連続回数を確認中）",
     motion: "動きを検知",
   };
@@ -324,7 +325,9 @@ function renderMotionAnalysis(payload) {
     + ` / 判定基準 ${percent(analysis.min_changed_ratio)}、`
     + `連続 ${analysis.consecutive_frames}/${analysis.required_frames} 回。`
     + ` 明るさ補正 ${analysis.brightness_shift}、画素差の閾値 ${analysis.threshold}、`
-    + `補正前の全体変化 ${percent(analysis.raw_changed_ratio)}。`;
+    + `補正前の全体変化 ${percent(analysis.raw_changed_ratio)}。`
+    + ` 位置補正 横${analysis.camera_shift_x ?? 0}px・縦${analysis.camera_shift_y ?? 0}px`
+    + `（低解像度映像上、補正を支持した領域 ${percent(analysis.camera_shift_support ?? 0)}）。`;
   motionOverlay.setAttribute("viewBox", `0 0 ${analysis.width} ${analysis.height}`);
   for (const tile of analysis.tiles) {
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
