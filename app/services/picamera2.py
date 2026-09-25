@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from app.config import Settings
 from app.services.motion import ShiftedLuma, estimate_frame_shift, smooth_luma
+from app.services.orientation import set_mp4_rotation
 from app.services.videos import VideoStorageFullError, VideoStore
 
 LOGGER = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class _Recording:
     started_at: float
     deadline: float
     maximum_deadline: float
+    rotation_degrees: int = 0
 
 
 class Picamera2Service:
@@ -56,6 +58,7 @@ class Picamera2Service:
         self._last_recording_finished_at = 0.0
         self._motion_settling_until = 0.0
         self._motion_enabled = settings.motion_enabled
+        self._rotation_degrees = 0
         self._started = False
         self._stopping = False
         self._last_frame_at: str | None = None
@@ -68,6 +71,7 @@ class Picamera2Service:
         if self._started:
             return
         self._motion_enabled = await asyncio.to_thread(self._load_motion_enabled)
+        self._rotation_degrees = await asyncio.to_thread(self._load_rotation)
         await asyncio.to_thread(self.video_store.recover)
         await asyncio.to_thread(self._open_camera)
         self._stopping = False
@@ -101,7 +105,8 @@ class Picamera2Service:
     async def capture_still(self, output_path: Path) -> None:
         if not self._started:
             raise RuntimeError("Picamera2 camera service is not running")
-        await asyncio.to_thread(self._capture_still, output_path)
+        async with self._control_lock:
+            await self._run_control(self._capture_still, output_path)
 
     @property
     def motion_enabled(self) -> bool:
@@ -138,7 +143,18 @@ class Picamera2Service:
             "error": error,
             "analysis": self._motion_analysis if self._motion_enabled else None,
             "last_recording_trigger": self._last_recording_trigger,
+            "rotation_degrees": self._rotation_degrees,
         }
+
+    async def set_rotation(self, degrees: int) -> int:
+        if degrees not in (0, 90, 180, 270):
+            raise ValueError("Rotation must be 0, 90, 180 or 270 degrees")
+        async with self._control_lock:
+            if self._stopping or self._recording is not None:
+                raise RuntimeError("Cannot rotate during a recording or shutdown")
+            await self._run_control(self._save_rotation, degrees)
+            self._rotation_degrees = degrees
+            return degrees
 
     async def _run_control(self, operation: Callable[..., Any], *args: Any) -> Any:
         # Cancellation must not release the control lock while its thread still mutates the camera.
@@ -231,6 +247,19 @@ class Picamera2Service:
         camera = self._require_camera()
         with self._camera_lock:
             camera.capture_file(str(output_path), name="main")
+        if self._rotation_degrees:
+            from PIL import Image
+
+            with Image.open(output_path) as image:
+                rotated = image.transpose(self._pillow_rotation(Image))
+                rotated.save(output_path, format="JPEG", quality=90)
+
+    def _pillow_rotation(self, image_module: Any) -> Any:
+        return {
+            90: image_module.Transpose.ROTATE_270,
+            180: image_module.Transpose.ROTATE_180,
+            270: image_module.Transpose.ROTATE_90,
+        }[self._rotation_degrees]
 
     async def _produce_frames(self) -> None:
         interval = 1 / self.settings.live_stream_fps
@@ -327,6 +356,8 @@ class Picamera2Service:
                 Image.fromarray(v_plane).resize((width, height), Image.BILINEAR),
             ),
         ).convert("RGB")
+        if self._rotation_degrees:
+            image = image.transpose(self._pillow_rotation(Image))
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=75, optimize=False)
         return luma, buffer.getvalue()
@@ -546,6 +577,7 @@ class Picamera2Service:
                 started_at=now,
                 deadline=now + self.settings.motion_record_seconds,
                 maximum_deadline=now + self.settings.motion_max_record_seconds,
+                rotation_degrees=self._rotation_degrees,
             )
 
     def _finish_recording(self, discard: bool = False) -> None:
@@ -566,6 +598,8 @@ class Picamera2Service:
                 and recording.temporary_path.is_file()
                 and recording.temporary_path.stat().st_size > 0
             ):
+                if recording.rotation_degrees:
+                    set_mp4_rotation(recording.temporary_path, recording.rotation_degrees)
                 recording.temporary_path.replace(final_path)
                 try:
                     self.video_store.set_duration(recording.video_id, duration_seconds)
@@ -594,6 +628,30 @@ class Picamera2Service:
             return enabled
         LOGGER.warning("Motion detection state is invalid; disabling motion detection")
         return False
+
+    def _load_rotation(self) -> int:
+        try:
+            state = json.loads(self.settings.rotation_state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return 0
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            LOGGER.warning("Unable to read rotation state; using zero degrees")
+            return 0
+        degrees = state.get("degrees") if isinstance(state, dict) else None
+        if type(degrees) is int and degrees in (0, 90, 180, 270):
+            return degrees
+        LOGGER.warning("Invalid rotation state; using zero degrees")
+        return 0
+
+    def _save_rotation(self, degrees: int) -> None:
+        path = self.settings.rotation_state_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(json.dumps({"degrees": degrees}) + "\n", encoding="utf-8")
+            temporary_path.replace(path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def _save_motion_enabled(self, enabled: bool) -> None:
         path = self.settings.motion_state_path

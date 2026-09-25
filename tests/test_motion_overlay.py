@@ -23,9 +23,15 @@ const sampleAnalysis = {
           {x: 352, y: 160, changed_ratio: 0.125, confirmed: false}],
 };
 const sampleStatus = {enabled: true, state: 'recording', stream_state: 'streaming',
-  error: null, analysis: sampleAnalysis, last_recording_trigger: sampleAnalysis};
-window.fetch = async (url) => ({ok: true,
-  json: async () => url === '/api/motion' ? sampleStatus : []});
+  error: null, rotation_degrees: 0,
+  analysis: sampleAnalysis, last_recording_trigger: sampleAnalysis};
+window.fetch = async (url, options = {}) => {
+  if (url === '/api/rotation') {
+    sampleStatus.rotation_degrees = JSON.parse(options.body).degrees;
+    return {ok: true, json: async () => ({degrees: sampleStatus.rotation_degrees})};
+  }
+  return {ok: true, json: async () => url === '/api/motion' ? sampleStatus : []};
+};
 """
 CHECKS = """
 window.addEventListener('load', async () => {
@@ -67,6 +73,39 @@ window.addEventListener('load', async () => {
     check(text.textContent.includes('カメラの揺れを補正'), 'camera motion reason must display');
     check(text.textContent.includes('横1.5px・縦-0.5px'), 'estimated displacement must display');
     check(overlay.querySelectorAll('rect').length === 0, 'camera-only motion must clear tiles');
+    const button = document.querySelector('#rotation-button');
+    check(button.disabled, 'rotation button must be disabled while recording');
+    check(button.textContent.trim() === '', 'rotation control must have icon only');
+    sampleStatus.state = 'waiting';
+    renderMotionStatus(sampleStatus);
+    check(!button.disabled, 'rotation button must be available after recording');
+    button.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check(sampleStatus.rotation_degrees === 90, 'rotation button must advance 90 degrees');
+    check(button.getAttribute('aria-label').includes('90度'), 'icon must have accessible label');
+    const coordinates = {90: [168, 320], 180: [288, 168], 270: [160, 288], 0: [320, 160]};
+    for (const degrees of [90, 180, 270, 0]) {
+      sampleStatus.rotation_degrees = degrees;
+      renderMotionStatus(sampleStatus);
+      const rect = overlay.querySelector('rect');
+      check(Number(rect.getAttribute('x')) === coordinates[degrees][0]
+            && Number(rect.getAttribute('y')) === coordinates[degrees][1],
+            `tile coordinates must follow ${degrees} degree rotation`);
+      check(overlay.viewBox.baseVal.width === (degrees % 180 ? 360 : 640),
+            'overlay dimensions must follow image orientation');
+    }
+    image.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
+      + "width='360' height='640'%3E%3C/svg%3E";
+    await image.decode();
+    sampleStatus.rotation_degrees = 90;
+    renderMotionStatus(sampleStatus);
+    const portraitBounds = image.getBoundingClientRect();
+    const portraitScale = Math.min((portraitBounds.width - 2) / 360,
+                                   (portraitBounds.height - 2) / 640);
+    const portraitLeft = portraitBounds.left
+      + (portraitBounds.width - 360 * portraitScale) / 2 + 168 * portraitScale;
+    check(Math.abs(overlay.querySelector('rect').getBoundingClientRect().left - portraitLeft) < 2,
+          'rotated overlay must align with portrait image');
     document.body.dataset.testResult = 'passed';
   } catch (error) {
     document.body.dataset.testResult = error.message;

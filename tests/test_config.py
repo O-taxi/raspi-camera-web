@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.config import Settings
@@ -67,3 +69,10 @@ def test_video_storage_limits_are_positive(monkeypatch) -> None:
     monkeypatch.setenv("MAXIMUM_VIDEO_BYTES", "0")
     with pytest.raises(ValueError, match="MAXIMUM_VIDEO_BYTES"):
         Settings.from_environment()
+
+
+def test_rotation_state_follows_video_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VIDEO_DIR", str(tmp_path / "videos"))
+    monkeypatch.delenv("ROTATION_STATE_PATH", raising=False)
+    expected = tmp_path / "videos" / ".rotation-state.json"
+    assert Settings.from_environment().rotation_state_path == expected

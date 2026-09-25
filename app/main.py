@@ -78,6 +78,15 @@ class MotionStatusResponse(BaseModel):
     error: str | None
     analysis: MotionAnalysisResponse | None = None
     last_recording_trigger: MotionAnalysisResponse | None = None
+    rotation_degrees: Literal[0, 90, 180, 270]
+
+
+class RotationRequest(BaseModel):
+    degrees: Literal[0, 90, 180, 270]
+
+
+class RotationResponse(BaseModel):
+    degrees: Literal[0, 90, 180, 270]
 
 
 class MotionSettingsRequest(BaseModel):
@@ -239,6 +248,27 @@ def create_app(
             raise HTTPException(status_code=503, detail="Motion detection update failed") from exc
         response.headers["Cache-Control"] = "no-store"
         return MotionStatusResponse(**video_service.status())
+
+    @application.put(
+        "/api/rotation",
+        response_model=RotationResponse,
+        responses={403: {"model": ErrorResponse}, 409: {"model": ErrorResponse},
+                   503: {"model": ErrorResponse}},
+    )
+    async def update_rotation(request: Request, rotation: RotationRequest) -> RotationResponse:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site rotation is not allowed")
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Rotation is not available")
+        try:
+            degrees = await video_service.set_rotation(rotation.degrees)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409, detail="Rotation is unavailable while recording"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Rotation could not be saved") from exc
+        return RotationResponse(degrees=degrees)
 
     @application.get("/api/videos", response_model=list[VideoResponse])
     async def videos() -> list[VideoResponse]:

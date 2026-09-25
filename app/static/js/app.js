@@ -20,6 +20,7 @@ const previousVideoPageButton = document.querySelector("#previous-video-page");
 const nextVideoPageButton = document.querySelector("#next-video-page");
 const videoPageInfo = document.querySelector("#video-page-info");
 const motionToggle = document.querySelector("#motion-toggle");
+const rotationButton = document.querySelector("#rotation-button");
 const cameraNotice = document.querySelector("#camera-notice");
 const motionDiagnostics = document.querySelector("#motion-diagnostics");
 const motionAnalysisSource = document.querySelector("#motion-analysis-source");
@@ -34,6 +35,7 @@ let motionStatus = null;
 let motionStatusRequestToken = 0;
 let motionStatusRequestInProgress = false;
 let motionUpdateInProgress = false;
+let rotationUpdateInProgress = false;
 let currentPage = 1;
 let currentVideoPage = 1;
 let selectedPhoto = null;
@@ -265,6 +267,12 @@ function publicErrorMessage(message) {
 function renderMotionStatus(payload) {
   motionStatus = payload;
   renderMotionAnalysis(payload);
+  if (rotationButton !== null) {
+    const degrees = payload.rotation_degrees;
+    rotationButton.disabled = rotationUpdateInProgress || payload.state === "recording";
+    rotationButton.setAttribute("aria-label", `映像を右に90度回転（現在${degrees}度）`);
+    rotationButton.title = `映像を右に90度回転（現在${degrees}度）`;
+  }
   if (cameraNotice !== null) {
     const isError = Boolean(payload.error) || payload.stream_state === "stale" || payload.state === "error";
     let message = "";
@@ -328,13 +336,35 @@ function renderMotionAnalysis(payload) {
     + `補正前の全体変化 ${percent(analysis.raw_changed_ratio)}。`
     + ` 位置補正 横${analysis.camera_shift_x ?? 0}px・縦${analysis.camera_shift_y ?? 0}px`
     + `（低解像度映像上、補正を支持した領域 ${percent(analysis.camera_shift_support ?? 0)}）。`;
-  motionOverlay.setAttribute("viewBox", `0 0 ${analysis.width} ${analysis.height}`);
+  const degrees = payload.rotation_degrees || 0;
+  const portrait = degrees === 90 || degrees === 270;
+  motionOverlay.setAttribute("viewBox", `0 0 ${portrait ? analysis.height : analysis.width} ${portrait ? analysis.width : analysis.height}`);
   for (const tile of analysis.tiles) {
+    const width = Math.min(analysis.tile_size, analysis.width - tile.x);
+    const height = Math.min(analysis.tile_size, analysis.height - tile.y);
+    let x = tile.x;
+    let y = tile.y;
+    let boxWidth = width;
+    let boxHeight = height;
+    if (degrees === 90) {
+      x = analysis.height - tile.y - height;
+      y = tile.x;
+      boxWidth = height;
+      boxHeight = width;
+    } else if (degrees === 180) {
+      x = analysis.width - tile.x - width;
+      y = analysis.height - tile.y - height;
+    } else if (degrees === 270) {
+      x = tile.y;
+      y = analysis.width - tile.x - width;
+      boxWidth = height;
+      boxHeight = width;
+    }
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    rect.setAttribute("x", tile.x);
-    rect.setAttribute("y", tile.y);
-    rect.setAttribute("width", Math.min(analysis.tile_size, analysis.width - tile.x));
-    rect.setAttribute("height", Math.min(analysis.tile_size, analysis.height - tile.y));
+    rect.setAttribute("x", x);
+    rect.setAttribute("y", y);
+    rect.setAttribute("width", boxWidth);
+    rect.setAttribute("height", boxHeight);
     rect.setAttribute("fill", tile.confirmed ? "#ff404033" : "#ffd54f22");
     rect.setAttribute("stroke", tile.confirmed ? "#ff4040" : "#ffd54f");
     rect.setAttribute("stroke-width", "2");
@@ -343,6 +373,7 @@ function renderMotionAnalysis(payload) {
 }
 
 function showMotionConnectionError() {
+  if (rotationButton !== null) rotationButton.disabled = true;
   if (motionOverlay !== null) motionOverlay.replaceChildren();
   if (motionAnalysisStatus !== null) {
     motionAnalysisStatus.textContent = "判定情報を取得できません。";
@@ -354,6 +385,32 @@ function showMotionConnectionError() {
   }
   if (motionToggle !== null) {
     motionToggle.disabled = true;
+  }
+}
+
+async function rotateCamera() {
+  if (rotationButton === null || motionStatus === null || rotationUpdateInProgress) return;
+  rotationUpdateInProgress = true;
+  rotationButton.disabled = true;
+  const degrees = ((motionStatus.rotation_degrees || 0) + 90) % 360;
+  ++motionStatusRequestToken;
+  try {
+    const { response, payload } = await fetchMotionJson("/api/rotation", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ degrees }),
+    });
+    if (!response.ok) throw new Error(response.status === 409
+      ? "録画中は回転できません。録画の終了後に再度お試しください。"
+      : "回転設定を保存できませんでした。");
+    renderMotionStatus({ ...motionStatus, rotation_degrees: payload.degrees });
+    setStatus(`映像を${payload.degrees}度に回転しました。`);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    rotationUpdateInProgress = false;
+    if (motionStatus !== null) renderMotionStatus(motionStatus);
+    loadMotionStatus();
   }
 }
 
@@ -373,6 +430,7 @@ async function loadMotionStatus() {
   if (
     motionToggle === null
     || motionUpdateInProgress
+    || rotationUpdateInProgress
     || motionStatusRequestInProgress
     || document.visibilityState !== "visible"
   ) {
@@ -387,12 +445,12 @@ async function loadMotionStatus() {
     if (!response.ok) {
       throw new Error("動体検知の状態を取得できませんでした。");
     }
-    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress) {
+    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress || rotationUpdateInProgress) {
       return;
     }
     renderMotionStatus(payload);
   } catch (error) {
-    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress) {
+    if (requestToken !== motionStatusRequestToken || motionUpdateInProgress || rotationUpdateInProgress) {
       return;
     }
     showMotionConnectionError();
@@ -544,6 +602,9 @@ if (motionToggle !== null) {
   motionAnalysisSource.addEventListener("change", () => {
     if (motionStatus !== null) renderMotionAnalysis(motionStatus);
   });
+}
+if (rotationButton !== null) {
+  rotationButton.addEventListener("click", rotateCamera);
 }
 photoDialog.addEventListener("close", () => {
   selectedPhoto = null;

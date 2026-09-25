@@ -163,7 +163,7 @@ def validate_overwrite(
         raise FileExistsError(
             "環境ファイルの再生成には --force --reset-settings が必要です。"
             "未指定の項目は既定値に戻ります。既存設定をバックアップし、"
-            "--dry-run の出力を確認してください。通常の設定変更には sudoedit を使えます。"
+            "全ての個別設定を引数に指定し、--dry-run の出力を確認してください。"
         )
 
 

@@ -108,6 +108,7 @@ class Settings:
     motion_cooldown_seconds: int = 30
     motion_enabled: bool = True
     motion_state_path: Path = PROJECT_ROOT / "data" / "videos" / ".motion-state.json"
+    rotation_state_path: Path = PROJECT_ROOT / "data" / "videos" / ".rotation-state.json"
     maximum_video_bytes: int = 500_000_000
     minimum_free_disk_bytes: int = 100_000_000
 
@@ -166,5 +167,8 @@ class Settings:
             motion_enabled=_boolean("MOTION_ENABLED", True),
             motion_state_path=Path(
                 os.getenv("MOTION_STATE_PATH", video_dir / ".motion-state.json")
+            ),
+            rotation_state_path=Path(
+                os.getenv("ROTATION_STATE_PATH", video_dir / ".rotation-state.json")
             ),
         )
