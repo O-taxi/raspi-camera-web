@@ -11,13 +11,11 @@
     <main class="page-shell">
       <header class="hero">
         <p class="eyebrow">PRIVATE CAMERA</p>
-        <h1>Raspi Camera</h1>
       </header>
-
       {% if live_stream_available %}
       <section class="live-view" aria-labelledby="live-view-title">
         <div class="section-heading live-heading">
-          <h2 id="live-view-title">ライブ映像</h2>
+          <h2 id="live-view-title">Live Stream</h2>
           <div class="live-actions">
             <button id="rotation-button" class="secondary-button rotation-button" type="button" aria-label="映像を右に90度回転" title="映像を右に90度回転" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -34,7 +32,7 @@
           <svg id="motion-overlay" aria-hidden="true" hidden></svg>
         </div>
         <details id="motion-diagnostics" class="motion-diagnostics">
-          <summary>検知箇所・判定理由を確認</summary>
+          <summary>検知箇所の可視化</summary>
           <label for="motion-analysis-source">表示する判定</label>
           <select id="motion-analysis-source">
             <option value="current">現在の判定</option>
