@@ -588,22 +588,51 @@ h2 {
     padding-top: 2rem;
   }
 
-  .capture-panel {
-    justify-content: center;
-  }
-
   .capture-actions {
     width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .capture-actions.single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .capture-button,
+  .video-record-button {
+    min-width: 0;
+    gap: 0.4rem;
+    padding: 0.85rem 0.5rem;
+    white-space: nowrap;
+  }
+
+  .capture-button svg,
+  .video-record-button svg {
+    flex: 0 0 auto;
   }
 
   .live-heading {
     align-items: flex-start;
     flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
   .live-actions {
     width: 100%;
-    justify-content: flex-end;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 0.4rem;
+  }
+
+  .live-actions button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .motion-toggle,
+  .motion-settings-button {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.75rem;
   }
 
   .gallery {
