@@ -23,13 +23,15 @@ description: raspi-camera-webの機能、HTTP API、設定、保存データの�
 | `picamera2` | CSI | 対応 | 対応 | 対応 |
 | `mock` | なし | 開発用 | 非対応 | 非対応 |
 
-ブラウザー画面は写真撮影、写真履歴の表示・削除に対応します。Picamera2を使う場合はライブMJPEG映像、90度ずつの右回転、動体検知ON/OFF、動画履歴の表示・ダウンロード・削除も表示します。写真は8件単位、動画は10件単位でページを切り替えます。
+ブラウザー画面は写真撮影、写真履歴の表示・削除に対応します。Picamera2を使う場合はライブMJPEG映像、90度ずつの右回転、動体検知ON/OFF、動体検知・録画設定、手動録画、動画履歴の表示・ダウンロード・削除も表示します。写真は8件単位、動画は10件単位でページを切り替えます。
 
 動体検知の状態は`VIDEO_DIR`内の`.motion-state.json`へ保存します。保存値が有効なら環境変数の値より優先されます。ファイルがない場合は`MOTION_ENABLED`を使います。ファイルが不正または読み取れない場合は安全側としてOFFで起動します。
 
 Picamera2の回転角度は`VIDEO_DIR`内の`.rotation-state.json`へ保存します。保存値は0・90・180・270度で、ファイルがない場合や不正な場合は0度に戻します。ライブMJPEGと新しい写真は画像そのものを回転し、新しいMP4は表示用の回転行列を付けます。既存の写真・動画は変更しません。録画中・終了処理中は回転を変更できません。
 
-停止操作は進行中の録画を破棄します。画面は確認を表示してから停止します。動体検知録画は静止画やカメラ全体を停止せず、録画用エンコーダーを終了します。録画には時間上限、管理対象動画の合計容量上限、空き容量下限を適用します。上限に近づいた録画は停止し、その時点までの動画を保存できるか試みます。フレーム取得やエンコーダーに障害が起きた場合、録画は継続できないことがあり、状態APIの`state`と`error`で利用者に示します。ハードウェアが応答を停止した場合の復旧時間は保証しません。
+動体検知・録画設定はブラウザー画面から変更でき、`VIDEO_DIR`内の`.motion-settings.json`へ保存します。動体検知録画の最短保存時間、検知後の録画継続時間、1本の最大録画時間、次の録画までの待機時間、輝度差の検知しきい値を変更できます。手動録画には最短保存時間を適用しません。保存後すぐに反映し、サービス再起動後も維持します。設定ファイルがない場合は対応する環境変数を初期値として使い、設定ファイルが不正な場合も環境変数の初期値へ戻します。録画中の設定変更はできません。
+
+動体検知停止操作は進行中の動体検知録画を破棄し、画面は確認を表示してから停止します。手動録画は専用の停止操作でその時点までの動画を保存します。どちらの録画も静止画撮影やライブ映像を止めず、録画用エンコーダーだけを終了します。録画には時間上限、管理対象動画の合計容量上限、空き容量下限を適用します。上限に近づいた録画は停止し、その時点までの動画を保存できるか試みます。フレーム取得やエンコーダーに障害が起きた場合、録画は継続できないことがあり、状態APIの`state`と`error`で利用者に示します。ハードウェアが応答を停止した場合の復旧時間は保証しません。
 
 ## HTTP API
 
@@ -44,6 +46,10 @@ Picamera2の回転角度は`VIDEO_DIR`内の`.rotation-state.json`へ保存し�
 | `GET /stream.mjpg` | `200`, multipart MJPEG | `404` Picamera2未使用 |
 | `GET /api/motion` | `200`, 動体検知状態 | `404` Picamera2未使用 |
 | `PUT /api/motion` | `200`, 更新後の動体検知状態 | `403` クロスサイト要求、`404` Picamera2未使用、`422` リクエスト形式不正、`503` 状態保存・録画停止失敗 |
+| `GET /api/motion/settings` | `200`, 動体検知・録画設定 | `404` Picamera2未使用 |
+| `PUT /api/motion/settings` | `200`, 保存した設定 | `403` クロスサイト要求、`404` Picamera2未使用、`409` 録画中、`422` 設定値不正、`503` 保存失敗 |
+| `POST /api/recording/start` | `200`, 手動録画を開始した動体検知状態 | `403` クロスサイト要求、`404` Picamera2未使用、`409` 録画中、`503` 容量不足・録画開始失敗 |
+| `POST /api/recording/stop` | `200`, 手動録画を停止した動体検知状態 | `403` クロスサイト要求、`404` Picamera2未使用、`409` 手動録画なし、`503` 録画停止失敗 |
 | `PUT /api/rotation` | `200`, `{ "degrees": 90 }`などの更新後の角度 | `403` クロスサイト要求、`404` Picamera2未使用、`409` 録画中・終了中、`422` 角度不正、`503` 状態保存失敗 |
 | `GET /api/videos` | `200`, 動画オブジェクトの配列 | Picamera2未使用時は空配列 |
 | `GET /videos/{video_id}` | `200`, `video/mp4`添付ファイル | `404` ID不正または動画なし |
@@ -76,6 +82,7 @@ Picamera2の回転角度は`VIDEO_DIR`内の`.rotation-state.json`へ保存し�
 {
   "enabled": true,
   "state": "waiting",
+  "recording_source": null,
   "stream_state": "streaming",
   "last_frame_at": "2026-09-25T03:00:00+00:00",
   "error": null,
@@ -85,7 +92,7 @@ Picamera2の回転角度は`VIDEO_DIR`内の`.rotation-state.json`へ保存し�
 }
 ```
 
-`state`は`disabled`（検知停止中）、`waiting`（検知待機中）、`recording`（録画中）、`cooldown`（録画後の待機中）、`error`（検知または録画のエラー）です。`stream_state`は`starting`（初期化中）、`streaming`（フレーム受信中）、`stale`（フレーム更新が止まっている）です。`last_frame_at`は最終フレーム時刻をUTCのISO 8601文字列で示し、まだフレームがなければ`null`です。`error`は画面に表示できる短いメッセージまたは`null`です。
+`state`は`disabled`（検知停止中）、`waiting`（検知待機中）、`recording`（録画中）、`cooldown`（録画後の待機中）、`error`（検知または録画のエラー）です。`recording_source`は`motion`（動体検知）・`manual`（手動録画）・`null`（録画していない）のいずれかです。`stream_state`は`starting`（初期化中）、`streaming`（フレーム受信中）、`stale`（フレーム更新が止まっている）です。`last_frame_at`は最終フレーム時刻をUTCのISO 8601文字列で示し、まだフレームがなければ`null`です。`error`は画面に表示できる短いメッセージまたは`null`です。
 
 `analysis`は最新の判定で、検知OFF・最初の比較前は`null`です。`last_recording_trigger`はこの起動中に最後に録画を開始した判定（未開始なら`null`）で、OFFにしても保持します。両方とも次の形式です。画像は含めず、メモリ上に最新の各1件だけ保持します。
 
@@ -138,19 +145,20 @@ Picamera2の回転角度は`VIDEO_DIR`内の`.rotation-state.json`へ保存し�
 | `LIVE_STREAM_WIDTH` | `640` | ライブ映像と動体解析の幅 |
 | `LIVE_STREAM_HEIGHT` | `360` | ライブ映像と動体解析の高さ |
 | `LIVE_STREAM_FPS` | `5` | ライブ映像のフレームレート |
-| `MOTION_THRESHOLD` | `12.0` | 輝度差の検知しきい値 |
+| `MOTION_THRESHOLD` | `12.0` | 画面設定ファイルがない場合の輝度差検知しきい値 |
 | `MOTION_ANALYSIS_TILE_SIZE` | `32` | 動体解析領域の一辺（ピクセル） |
 | `MOTION_MIN_CHANGED_RATIO` | `0.10` | 1領域内で必要な変化画素の割合 |
 | `MOTION_ILLUMINATION_CHANGED_RATIO` | `0.65` | 全体照明変化とみなす変化割合 |
 | `MOTION_ILLUMINATION_DIRECTION_RATIO` | `0.90` | 同じ方向へ変化した画素の割合 |
 | `MOTION_SETTLE_SECONDS` | `5` | 全体照明変化の後に検知を再開するまでの秒数 |
 | `MOTION_MINIMUM_CONSECUTIVE_FRAMES` | `3` | 同じ小領域で検知成立に必要な連続フレーム数 |
-| `MOTION_RECORD_SECONDS` | `20` | 最後の検知後に録画を続ける秒数 |
-| `MOTION_MIN_RECORD_SECONDS` | `2` | 保存する最小録画時間 |
-| `MOTION_MAX_RECORD_SECONDS` | `60` | 1本の録画の最大時間 |
-| `MOTION_COOLDOWN_SECONDS` | `30` | 録画後に次の録画を始めない秒数 |
+| `MOTION_RECORD_SECONDS` | `20` | 画面設定ファイルがない場合の検知後録画継続時間 |
+| `MOTION_MIN_RECORD_SECONDS` | `2` | 画面設定ファイルがない場合の最小録画時間 |
+| `MOTION_MAX_RECORD_SECONDS` | `60` | 画面設定ファイルがない場合の1本の最大録画時間 |
+| `MOTION_COOLDOWN_SECONDS` | `30` | 画面設定ファイルがない場合の録画後待機時間 |
 | `MOTION_ENABLED` | `true` | 保存状態ファイルがない場合の初期状態 |
 | `MOTION_STATE_PATH` | `<VIDEO_DIR>/.motion-state.json` | 動体検知ON/OFFの永続化ファイル。systemdでは書き込み許可のある`VIDEO_DIR`内へ置く |
+| `MOTION_SETTINGS_PATH` | `<VIDEO_DIR>/.motion-settings.json` | 画面で変更した動体検知・録画設定の保存先。systemdでは書き込み許可のある`VIDEO_DIR`内へ置く |
 | `ROTATION_STATE_PATH` | `<VIDEO_DIR>/.rotation-state.json` | Picamera2の回転角度の永続化ファイル。systemdでは書き込み許可のある`VIDEO_DIR`内へ置く |
 | `PYTHONPATH` | 設定なし | Picamera2利用時にOSのPythonパッケージパスを追加 |
 

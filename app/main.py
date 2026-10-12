@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.services.camera import (
@@ -20,9 +20,10 @@ from app.services.camera import (
     CameraService,
     CameraTimeoutError,
 )
+from app.services.motion_settings import MotionTuning
 from app.services.photos import PhotoStore
 from app.services.picamera2 import MJPEG_BOUNDARY, Picamera2Service
-from app.services.videos import VideoStore
+from app.services.videos import VideoStorageFullError, VideoStore
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -73,6 +74,7 @@ class MotionAnalysisResponse(BaseModel):
 class MotionStatusResponse(BaseModel):
     enabled: bool
     state: Literal["disabled", "waiting", "recording", "cooldown", "error"]
+    recording_source: Literal["motion", "manual"] | None
     stream_state: Literal["starting", "streaming", "stale"]
     last_frame_at: str | None
     error: str | None
@@ -91,6 +93,22 @@ class RotationResponse(BaseModel):
 
 class MotionSettingsRequest(BaseModel):
     enabled: bool
+
+
+class MotionTuningRequest(BaseModel):
+    minimum_record_seconds: int = Field(ge=1, le=3600)
+    record_seconds: int = Field(ge=1, le=3600)
+    maximum_record_seconds: int = Field(ge=1, le=3600)
+    cooldown_seconds: int = Field(ge=1, le=3600)
+    threshold: float = Field(gt=0, le=255)
+
+
+class MotionTuningResponse(BaseModel):
+    minimum_record_seconds: int
+    record_seconds: int
+    maximum_record_seconds: int
+    cooldown_seconds: int
+    threshold: float
 
 
 def create_app(
@@ -246,6 +264,95 @@ def create_app(
             await video_service.set_motion_enabled(settings.enabled)
         except (OSError, RuntimeError) as exc:
             raise HTTPException(status_code=503, detail="Motion detection update failed") from exc
+        response.headers["Cache-Control"] = "no-store"
+        return MotionStatusResponse(**video_service.status())
+
+    @application.get("/api/motion/settings", response_model=MotionTuningResponse)
+    async def motion_settings(response: Response) -> MotionTuningResponse:
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Motion settings are not available")
+        response.headers["Cache-Control"] = "no-store"
+        return MotionTuningResponse(**video_service.motion_tuning.as_dict())
+
+    @application.put(
+        "/api/motion/settings",
+        response_model=MotionTuningResponse,
+        responses={
+            403: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def update_motion_settings(
+        request: Request, response: Response, tuning: MotionTuningRequest
+    ) -> MotionTuningResponse:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(
+                status_code=403, detail="Cross-site settings updates are not allowed"
+            )
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Motion settings are not available")
+        new_tuning = MotionTuning(**tuning.model_dump())
+        try:
+            new_tuning.validate()
+            saved_tuning = await video_service.set_motion_tuning(new_tuning)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409, detail="Settings cannot be changed during a recording"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Settings could not be saved") from exc
+        response.headers["Cache-Control"] = "no-store"
+        return MotionTuningResponse(**saved_tuning.as_dict())
+
+    @application.post(
+        "/api/recording/start",
+        response_model=MotionStatusResponse,
+        responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse},
+                   409: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def start_manual_recording(request: Request, response: Response) -> MotionStatusResponse:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site recording is not allowed")
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Video recording is not available")
+        try:
+            await video_service.start_manual_recording()
+        except RuntimeError as exc:
+            if str(exc) == "A recording is already active":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=503, detail="Camera is not available") from exc
+        except VideoStorageFullError as exc:
+            raise HTTPException(status_code=503, detail="Video storage is full") from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="Video recording could not be started"
+            ) from exc
+        response.headers["Cache-Control"] = "no-store"
+        return MotionStatusResponse(**video_service.status())
+
+    @application.post(
+        "/api/recording/stop",
+        response_model=MotionStatusResponse,
+        responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse},
+                   409: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def stop_manual_recording(request: Request, response: Response) -> MotionStatusResponse:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(status_code=403, detail="Cross-site recording is not allowed")
+        if video_service is None:
+            raise HTTPException(status_code=404, detail="Video recording is not available")
+        try:
+            await video_service.stop_manual_recording()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail="No manual recording is active") from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="Video recording could not be stopped"
+            ) from exc
         response.headers["Cache-Control"] = "no-store"
         return MotionStatusResponse(**video_service.status())
 

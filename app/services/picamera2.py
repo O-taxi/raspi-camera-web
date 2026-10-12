@@ -10,11 +10,12 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.config import Settings
 from app.services.motion import ShiftedLuma, estimate_frame_shift, smooth_luma
+from app.services.motion_settings import MotionTuning, MotionTuningStore
 from app.services.orientation import set_mp4_rotation
 from app.services.videos import VideoStorageFullError, VideoStore
 
@@ -31,6 +32,7 @@ class _Recording:
     deadline: float
     maximum_deadline: float
     rotation_degrees: int = 0
+    source: Literal["motion", "manual"] = "motion"
 
 
 class Picamera2Service:
@@ -66,12 +68,24 @@ class Picamera2Service:
         self._started_at: float | None = None
         self._frame_error = False
         self._recording_error: str | None = None
+        self._motion_tuning_store = MotionTuningStore(
+            settings.motion_settings_path,
+            MotionTuning(
+                minimum_record_seconds=settings.motion_min_record_seconds,
+                record_seconds=settings.motion_record_seconds,
+                maximum_record_seconds=settings.motion_max_record_seconds,
+                cooldown_seconds=settings.motion_cooldown_seconds,
+                threshold=settings.motion_threshold,
+            ),
+        )
+        self._motion_tuning = self._motion_tuning_store.defaults
 
     async def start(self) -> None:
         if self._started:
             return
         self._motion_enabled = await asyncio.to_thread(self._load_motion_enabled)
         self._rotation_degrees = await asyncio.to_thread(self._load_rotation)
+        self._motion_tuning = await asyncio.to_thread(self._motion_tuning_store.load)
         await asyncio.to_thread(self.video_store.recover)
         await asyncio.to_thread(self._open_camera)
         self._stopping = False
@@ -112,6 +126,10 @@ class Picamera2Service:
     def motion_enabled(self) -> bool:
         return self._motion_enabled
 
+    @property
+    def motion_tuning(self) -> MotionTuning:
+        return self._motion_tuning
+
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
         last_activity = self._last_frame_monotonic
@@ -131,13 +149,14 @@ class Picamera2Service:
             state = "recording"
         elif not self._motion_enabled:
             state = "disabled"
-        elif now - self._last_recording_finished_at < self.settings.motion_cooldown_seconds:
+        elif now - self._last_recording_finished_at < self._motion_tuning.cooldown_seconds:
             state = "cooldown"
         else:
             state = "waiting"
         return {
             "enabled": self._motion_enabled,
             "state": state,
+            "recording_source": self._recording.source if self._recording is not None else None,
             "stream_state": stream_state,
             "last_frame_at": self._last_frame_at,
             "error": error,
@@ -176,7 +195,11 @@ class Picamera2Service:
             self._tile_motion_frames = {}
             self._motion_analysis = None
             self._motion_settling_until = 0.0
-            if not enabled and self._recording is not None:
+            if (
+                not enabled
+                and self._recording is not None
+                and self._recording.source == "motion"
+            ):
                 try:
                     await self._run_control(self._finish_recording, True)
                 except Exception as exc:
@@ -184,6 +207,36 @@ class Picamera2Service:
                     raise RuntimeError("Recording stop failed") from exc
             self._recording_error = None
             return self._motion_enabled
+
+    async def start_manual_recording(self) -> None:
+        async with self._control_lock:
+            if not self._started or self._stopping:
+                raise RuntimeError("Camera is not available")
+            if self._recording is not None:
+                raise RuntimeError("A recording is already active")
+            await self._run_control(self._start_recording, time.monotonic(), "manual")
+            self._recording_error = None
+
+    async def stop_manual_recording(self) -> None:
+        async with self._control_lock:
+            if self._recording is None or self._recording.source != "manual":
+                raise RuntimeError("No manual recording is active")
+            await self._run_control(self._finish_recording)
+
+    async def set_motion_tuning(self, tuning: MotionTuning) -> MotionTuning:
+        tuning.validate()
+        async with self._control_lock:
+            if self._stopping:
+                raise RuntimeError("Camera is stopping")
+            if self._recording is not None:
+                raise RuntimeError("Cannot update settings during a recording")
+            await self._run_control(self._motion_tuning_store.save, tuning)
+            self._motion_tuning = tuning
+            self._previous_luma = None
+            self._motion_frames = 0
+            self._tile_motion_frames = {}
+            self._motion_analysis = None
+            return self._motion_tuning
 
     async def mjpeg_frames(self) -> AsyncIterator[bytes]:
         version = -1
@@ -308,10 +361,14 @@ class Picamera2Service:
             if recording is None:
                 return
             now = time.monotonic()
-            if not self._motion_enabled:
+            if recording.source == "motion" and not self._motion_enabled:
                 await self._run_control(self._finish_recording, True)
             elif (
-                now >= min(recording.deadline, recording.maximum_deadline)
+                now >= recording.maximum_deadline
+                or (
+                    recording.source == "motion"
+                    and now >= recording.deadline
+                )
                 or self.status()["stream_state"] == "stale"
             ):
                 await self._run_control(self._finish_recording)
@@ -392,9 +449,9 @@ class Picamera2Service:
                 value = smooth_luma(current_luma, index, width)
                 raw_difference = value - smooth_luma(previous_luma, index, width)
                 raw_sample_count += 1
-                if raw_difference >= self.settings.motion_threshold:
+                if raw_difference >= self._motion_tuning.threshold:
                     brightened_pixels += 1
-                elif raw_difference <= -self.settings.motion_threshold:
+                elif raw_difference <= -self._motion_tuning.threshold:
                     darkened_pixels += 1
                 if shifted:
                     # Newly visible image edges have no reference; never compare
@@ -437,8 +494,8 @@ class Picamera2Service:
             # Compensation only suppresses candidates; it must not turn two
             # opposite sub-threshold flickers into a new motion candidate.
             if (
-                abs(difference) >= self.settings.motion_threshold
-                and abs(difference - brightness_shift) >= self.settings.motion_threshold
+                abs(difference) >= self._motion_tuning.threshold
+                and abs(difference - brightness_shift) >= self._motion_tuning.threshold
             ):
                 tile_changed_counts[tile] = tile_changed_counts.get(tile, 0) + 1
 
@@ -486,7 +543,7 @@ class Picamera2Service:
             "camera_shift_support": shift.support,
             "raw_changed_ratio": changed_ratio,
             "largest_tile_changed_ratio": max(ratios.values(), default=0.0),
-            "threshold": self.settings.motion_threshold,
+            "threshold": self._motion_tuning.threshold,
             "min_changed_ratio": self.settings.motion_min_changed_ratio,
             "consecutive_frames": self._motion_frames,
             "required_frames": self.settings.motion_minimum_consecutive_frames,
@@ -521,11 +578,15 @@ class Picamera2Service:
         now = time.monotonic()
         recording = self._recording
         if recording is not None:
+            if recording.source == "manual":
+                if now >= recording.maximum_deadline:
+                    await self._run_control(self._finish_recording)
+                return
             if now >= recording.maximum_deadline:
                 await self._run_control(self._finish_recording)
             elif motion_detected:
                 recording.deadline = min(
-                    now + self.settings.motion_record_seconds,
+                    now + self._motion_tuning.record_seconds,
                     recording.maximum_deadline,
                 )
             elif now >= recording.deadline:
@@ -534,10 +595,10 @@ class Picamera2Service:
 
         if (
             motion_detected
-            and now - self._last_recording_finished_at >= self.settings.motion_cooldown_seconds
+            and now - self._last_recording_finished_at >= self._motion_tuning.cooldown_seconds
         ):
             trigger = self._motion_analysis
-            await self._run_control(self._start_recording, now)
+            await self._run_control(self._start_recording, now, "motion")
             self._last_recording_trigger = trigger
             if trigger is not None:
                 LOGGER.info(
@@ -550,10 +611,10 @@ class Picamera2Service:
                 )
             self._recording_error = None
 
-    def _start_recording(self, now: float) -> None:
+    def _start_recording(self, now: float, source: Literal["motion", "manual"]) -> None:
         # Include a margin for container overhead; the monitor also checks actual disk usage.
         expected_bytes = int(
-            self.settings.video_bitrate * self.settings.motion_max_record_seconds / 8 * 1.1
+            self.settings.video_bitrate * self._motion_tuning.maximum_record_seconds / 8 * 1.1
         )
         self.video_store.prepare_recording(expected_bytes)
         try:
@@ -575,8 +636,13 @@ class Picamera2Service:
                 video_id=video_id,
                 temporary_path=temporary_path,
                 started_at=now,
-                deadline=now + self.settings.motion_record_seconds,
-                maximum_deadline=now + self.settings.motion_max_record_seconds,
+                deadline=now + (
+                    self._motion_tuning.maximum_record_seconds
+                    if source == "manual"
+                    else self._motion_tuning.record_seconds
+                ),
+                maximum_deadline=now + self._motion_tuning.maximum_record_seconds,
+                source=source,
                 rotation_degrees=self._rotation_degrees,
             )
 
@@ -594,7 +660,10 @@ class Picamera2Service:
             duration_seconds = time.monotonic() - recording.started_at
             if (
                 not discard
-                and duration_seconds >= self.settings.motion_min_record_seconds
+                and (
+                    recording.source == "manual"
+                    or duration_seconds >= self._motion_tuning.minimum_record_seconds
+                )
                 and recording.temporary_path.is_file()
                 and recording.temporary_path.stat().st_size > 0
             ):

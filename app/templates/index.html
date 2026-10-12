@@ -24,6 +24,7 @@
               </svg>
             </button>
             <button id="motion-toggle" class="secondary-button motion-toggle" type="button" disabled>動体検知</button>
+            <button id="motion-settings-button" class="secondary-button motion-settings-button" type="button" disabled>設定</button>
           </div>
         </div>
         <p id="camera-notice" class="camera-notice" role="status" aria-live="polite" hidden></p>
@@ -45,13 +46,24 @@
       {% endif %}
 
       <section class="capture-panel" aria-label="撮影操作">
-        <button id="capture-button" class="capture-button" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8.5 5.5 10 3.5h4l1.5 2H19a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3h3.5Z"></path>
-            <circle cx="12" cy="13" r="4"></circle>
-          </svg>
-          <span id="capture-label">撮影</span>
-        </button>
+        <div class="capture-actions{% if not live_stream_available %} single{% endif %}">
+          <button id="capture-button" class="capture-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8.5 5.5 10 3.5h4l1.5 2H19a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3h3.5Z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+            <span id="capture-label">静止画</span>
+          </button>
+          {% if live_stream_available %}
+          <button id="video-record-button" class="video-record-button" type="button" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="6" width="13" height="12" rx="2"></rect>
+              <path d="m16 10 5-3v10l-5-3z"></path>
+            </svg>
+            <span id="video-record-label">動画</span>
+          </button>
+          {% endif %}
+        </div>
       </section>
 
       <section aria-labelledby="gallery-title">
@@ -106,6 +118,49 @@
         <button id="delete-photo" class="danger-button" type="button">この写真を削除</button>
       </div>
     </dialog>
+
+    {% if live_stream_available %}
+    <dialog id="motion-settings-dialog" class="motion-settings-dialog" aria-labelledby="motion-settings-title">
+      <form id="motion-settings-form">
+        <div class="dialog-toolbar">
+          <h2 id="motion-settings-title">動体検知・録画設定</h2>
+          <button id="close-motion-settings" class="secondary-button close-button" type="button" aria-label="閉じる">×</button>
+        </div>
+        <p class="settings-description">変更はすぐに反映され、サービス再起動後も保持されます。録画中は設定を保存できません。</p>
+        <div class="settings-fields">
+          <label>
+            動体検知録画の最短保存時間（秒）
+            <input id="minimum-record-seconds" name="minimum_record_seconds" type="number" min="1" max="3600" step="1" required>
+            <span>これより短い動体検知録画は保存しません。手動録画には適用されません。</span>
+          </label>
+          <label>
+            動きを検知しなくなってから録画を続ける時間（秒）
+            <input id="record-seconds" name="record_seconds" type="number" min="1" max="3600" step="1" required>
+            <span>動きが続く間は録画が延長されます。</span>
+          </label>
+          <label>
+            1本あたりの最大録画時間（秒）
+            <input id="maximum-record-seconds" name="maximum_record_seconds" type="number" min="1" max="3600" step="1" required>
+            <span>動きが続いても、この時間で録画を終了します。</span>
+          </label>
+          <label>
+            次の録画まで待つ時間（秒）
+            <input id="cooldown-seconds" name="cooldown_seconds" type="number" min="1" max="3600" step="1" required>
+          </label>
+          <label>
+            動きの判定しきい値
+            <input id="motion-threshold" name="threshold" type="number" min="0.1" max="255" step="0.5" required>
+            <span>値を小さくすると小さな変化も検知しやすくなります。</span>
+          </label>
+        </div>
+        <p id="motion-settings-error" class="settings-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button id="cancel-motion-settings" class="secondary-button" type="button">キャンセル</button>
+          <button id="save-motion-settings" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+    {% endif %}
 
     <script src="{{ url_for('static', path='/js/app.js') }}?v={{ asset_versions['js/app.js'] }}" defer></script>
   </body>

@@ -76,6 +76,7 @@ h2 {
 
 .live-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
@@ -103,6 +104,18 @@ h2 {
   display: flex;
   justify-content: center;
   margin-bottom: 1.5rem;
+}
+
+.capture-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  width: min(32rem, 100%);
+}
+
+.capture-actions.single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 15rem;
 }
 
 .live-view {
@@ -179,6 +192,11 @@ h2 {
   color: #dff9ff;
 }
 
+.motion-settings-button {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+}
+
 .section-heading h2 {
   margin-bottom: 0.25rem;
 }
@@ -198,7 +216,31 @@ h2 {
   box-shadow: 0 0.75rem 2rem rgb(72 202 228 / 18%);
 }
 
-.capture-button svg {
+.capture-button,
+.video-record-button {
+  width: 100%;
+}
+
+.video-record-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-width: 8rem;
+  padding: 0.9rem 1.4rem;
+  border: 1px solid #3a4a62;
+  background: #182235;
+  color: #edf2f7;
+}
+
+.video-record-button.recording {
+  border-color: #9c3c4a;
+  background: #3a1d26;
+  color: #ffd9dc;
+}
+
+.capture-button svg,
+.video-record-button svg {
   width: 1.4rem;
   height: 1.4rem;
   fill: none;
@@ -434,6 +476,68 @@ h2 {
   color: #edf2f7;
 }
 
+.motion-settings-dialog {
+  width: min(38rem, calc(100% - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1.25rem;
+  overflow-y: auto;
+  border: 1px solid #3a4a62;
+  border-radius: 1rem;
+  background: #0c111b;
+  color: #edf2f7;
+}
+
+.motion-settings-dialog::backdrop {
+  background: rgb(0 0 0 / 78%);
+}
+
+.motion-settings-dialog h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.settings-description,
+.settings-fields span {
+  color: #a9b4c5;
+  font-size: 0.85rem;
+}
+
+.settings-fields {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.settings-fields label {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.settings-fields input {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #3a4a62;
+  border-radius: 0.6rem;
+  background: #131b2a;
+  color: #edf2f7;
+  font: inherit;
+}
+
+.settings-fields input:focus-visible {
+  outline: 3px solid #f7c75b;
+  outline-offset: 2px;
+}
+
+.settings-error {
+  color: #ffadb6;
+}
+
+.settings-error[hidden] {
+  display: none;
+}
+
 .photo-dialog::backdrop {
   background: rgb(0 0 0 / 78%);
 }
@@ -488,12 +592,18 @@ h2 {
     justify-content: center;
   }
 
-  .capture-button {
+  .capture-actions {
     width: 100%;
   }
 
   .live-heading {
     align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .live-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .gallery {
